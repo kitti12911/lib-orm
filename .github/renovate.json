@@ -1,0 +1,12 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": ["config:recommended"],
+    "timezone": "Asia/Bangkok",
+    "schedule": ["* 0-4 1 * *"],
+    "updateNotScheduled": false,
+    "enabledManagers": ["gomod", "github-actions"],
+    "postUpdateOptions": ["gomodTidy"],
+    "reviewersFromCodeOwners": true,
+    "assigneesFromCodeOwners": true,
+    "assignAutomerge": true
+}
