@@ -56,6 +56,10 @@ func New(ctx context.Context, cfg Config, opts ...Option) (*bun.DB, error) {
 		pgdriver.WithInsecure(cfg.Insecure),
 	))
 
+	return newDB(ctx, sqldb, cfg, options)
+}
+
+func newDB(ctx context.Context, sqldb *sql.DB, cfg Config, options options) (*bun.DB, error) {
 	applyPoolConfig(sqldb, cfg.Pool)
 
 	db := bun.NewDB(sqldb, pgdialect.New())
