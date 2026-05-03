@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/kitti12911/lib-orm/compare/v1.1.1...v1.2.0) (2026-05-03)
+
+
+### Features
+
+* add test coverage ([d25a725](https://github.com/kitti12911/lib-orm/commit/d25a725fa74d890c7e512b87004b382d162c9f41))
+
 ## [1.1.1](https://github.com/kitti12911/lib-orm/compare/v1.1.0...v1.1.1) (2026-05-03)
 
 
