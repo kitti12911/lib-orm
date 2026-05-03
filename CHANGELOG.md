@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/kitti12911/lib-orm/compare/v1.1.0...v1.1.1) (2026-05-03)
+
+
+### Bug Fixes
+
+* fix CGO_ENABLE -&gt; CGO_ENABLED ([9c26337](https://github.com/kitti12911/lib-orm/commit/9c26337e86a1a094d90726ce0b2e9f80e89ed4df))
+
 ## [1.1.0](https://github.com/kitti12911/lib-orm/compare/v1.0.0...v1.1.0) (2026-05-02)
 
 
