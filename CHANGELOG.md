@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/kitti12911/lib-orm/compare/v1.2.0...v1.3.0) (2026-05-03)
+
+
+### Features
+
+* add fieldmapgen ([4099d8f](https://github.com/kitti12911/lib-orm/commit/4099d8f6a79c1edc0727e90d2a7853e32c4d1ba1))
+
 ## [1.2.0](https://github.com/kitti12911/lib-orm/compare/v1.1.1...v1.2.0) (2026-05-03)
 
 
