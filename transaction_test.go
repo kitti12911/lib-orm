@@ -58,3 +58,32 @@ func TestTransactionProviderBeginError(t *testing.T) {
 	})
 	require.ErrorIs(t, err, beginErr)
 }
+
+func TestDBWrapper(t *testing.T) {
+	bunDB, mock := newMockBunDB(t)
+
+	db := Wrap(bunDB)
+	assert.Same(t, bunDB, db.Bun())
+	assert.Same(t, bunDB, db.IDB(context.Background()))
+
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+	err := db.Transaction(context.Background(), func(ctx context.Context) error {
+		tx, ok := db.TxFromContext(ctx)
+		require.True(t, ok)
+		assert.Equal(t, tx, db.IDB(ctx))
+		return nil
+	})
+	require.NoError(t, err)
+
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+	err = db.TransactionWithOptions(context.Background(), &sql.TxOptions{ReadOnly: true}, func(context.Context) error {
+		return nil
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+	mock.ExpectClose()
+	require.NoError(t, db.Close())
+}

@@ -13,8 +13,48 @@ type TransactionProvider struct {
 	db *bun.DB
 }
 
+type DB struct {
+	db         *bun.DB
+	txProvider *TransactionProvider
+}
+
+func Wrap(db *bun.DB) *DB {
+	return &DB{
+		db:         db,
+		txProvider: NewTransactionProvider(db),
+	}
+}
+
 func NewTransactionProvider(db *bun.DB) *TransactionProvider {
 	return &TransactionProvider{db: db}
+}
+
+func (db *DB) Bun() *bun.DB {
+	return db.db
+}
+
+func (db *DB) Close() error {
+	return db.db.Close()
+}
+
+func (db *DB) Transaction(ctx context.Context, fn func(context.Context) error) error {
+	return db.txProvider.Transaction(ctx, fn)
+}
+
+func (db *DB) TransactionWithOptions(
+	ctx context.Context,
+	opts *sql.TxOptions,
+	fn func(context.Context) error,
+) error {
+	return db.txProvider.TransactionWithOptions(ctx, opts, fn)
+}
+
+func (db *DB) TxFromContext(ctx context.Context) (bun.Tx, bool) {
+	return db.txProvider.TxFromContext(ctx)
+}
+
+func (db *DB) IDB(ctx context.Context) bun.IDB {
+	return db.txProvider.IDB(ctx)
 }
 
 func (p *TransactionProvider) Transaction(ctx context.Context, fn func(context.Context) error) error {

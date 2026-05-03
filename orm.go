@@ -41,7 +41,7 @@ func WithTracing(enabled bool) Option {
 	}
 }
 
-func New(ctx context.Context, cfg Config, opts ...Option) (*bun.DB, error) {
+func New(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 	options := options{}
 	for _, opt := range opts {
 		opt(&options)
@@ -56,7 +56,16 @@ func New(ctx context.Context, cfg Config, opts ...Option) (*bun.DB, error) {
 		pgdriver.WithInsecure(cfg.Insecure),
 	))
 
-	return newDB(ctx, sqldb, cfg, options)
+	return newWrappedDB(ctx, sqldb, cfg, options)
+}
+
+func newWrappedDB(ctx context.Context, sqldb *sql.DB, cfg Config, options options) (*DB, error) {
+	db, err := newDB(ctx, sqldb, cfg, options)
+	if err != nil {
+		return nil, err
+	}
+
+	return Wrap(db), nil
 }
 
 func newDB(ctx context.Context, sqldb *sql.DB, cfg Config, options options) (*bun.DB, error) {
@@ -81,20 +90,24 @@ func newDB(ctx context.Context, sqldb *sql.DB, cfg Config, options options) (*bu
 
 func Init(
 	ctx context.Context,
-	db *bun.DB,
+	db *DB,
 	cfg Config,
 	migrations *migrate.Migrations,
 	fixtures fs.FS,
 	fixtureNames ...string,
 ) error {
+	if db == nil {
+		return nil
+	}
+
 	if cfg.RunMigrations && migrations != nil {
-		if err := RunMigrations(ctx, db, migrations); err != nil {
+		if err := RunMigrations(ctx, db.Bun(), migrations); err != nil {
 			return err
 		}
 	}
 
 	if cfg.RunSeeders && fixtures != nil && len(fixtureNames) > 0 {
-		if err := LoadFixtures(ctx, db, fixtures, fixtureNames...); err != nil {
+		if err := LoadFixtures(ctx, db.Bun(), fixtures, fixtureNames...); err != nil {
 			return err
 		}
 	}

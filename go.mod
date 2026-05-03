@@ -1,4 +1,4 @@
-module github.com/kitti12911/lib-orm
+module github.com/kitti12911/lib-orm/v2
 
 go 1.26.2
 

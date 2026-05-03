@@ -81,8 +81,32 @@ func TestNewDB(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestNewWrappedDB(t *testing.T) {
+	sqlDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	mock.ExpectPing()
+
+	db, err := newWrappedDB(context.Background(), sqlDB, Config{Database: "app"}, options{})
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer db.Close()
+
+	assert.NotNil(t, db.Bun())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestInitNoop(t *testing.T) {
 	assert.NoError(t, Init(context.Background(), nil, Config{}, nil, nil))
+}
+
+func TestInitNoopWithDB(t *testing.T) {
+	db, mock := newMockBunDB(t)
+	defer db.Close()
+
+	err := Init(context.Background(), Wrap(db), Config{}, nil, nil)
+
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestInitReturnsMigrationError(t *testing.T) {
@@ -92,7 +116,7 @@ func TestInitReturnsMigrationError(t *testing.T) {
 	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS bun_migrations`).
 		WillReturnError(errors.New("create failed"))
 
-	err := Init(context.Background(), db, Config{RunMigrations: true}, migrate.NewMigrations(), nil)
+	err := Init(context.Background(), Wrap(db), Config{RunMigrations: true}, migrate.NewMigrations(), nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "orm: init migrations")
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -102,7 +126,7 @@ func TestInitReturnsSeederError(t *testing.T) {
 	db, _ := newMockBunDB(t)
 	defer db.Close()
 
-	err := Init(context.Background(), db, Config{RunSeeders: true}, nil, fstest.MapFS{}, "missing.yml")
+	err := Init(context.Background(), Wrap(db), Config{RunSeeders: true}, nil, fstest.MapFS{}, "missing.yml")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "orm: load fixtures")
 }
