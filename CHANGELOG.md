@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/kitti12911/lib-orm/compare/v1.3.0...v1.4.0) (2026-05-03)
+
+
+### Features
+
+* add query filter and order operation ([3552d3a](https://github.com/kitti12911/lib-orm/commit/3552d3aa1fd267a5f21e64d44d8d89d88871bf80))
+
 ## [1.3.0](https://github.com/kitti12911/lib-orm/compare/v1.2.0...v1.3.0) (2026-05-03)
 
 
