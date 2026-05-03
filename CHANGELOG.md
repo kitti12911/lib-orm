@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/kitti12911/lib-orm/compare/v1.4.1...v1.5.0) (2026-05-03)
+
+
+### Features
+
+* add new filter operations: LIKE_CI, IN, BETWEEN, and BETWEEN_EXCLUSIVE ([2394f6f](https://github.com/kitti12911/lib-orm/commit/2394f6fd6520ee1ad93e2d6f68ded3eaa44de318))
+
 ## [1.4.1](https://github.com/kitti12911/lib-orm/compare/v1.4.0...v1.4.1) (2026-05-03)
 
 
