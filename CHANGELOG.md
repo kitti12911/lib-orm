@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/kitti12911/lib-orm/compare/v1.4.0...v1.4.1) (2026-05-03)
+
+
+### Bug Fixes
+
+* fix wrong alias generation, follow bun pattern instead ([6756576](https://github.com/kitti12911/lib-orm/commit/675657644acc3e9ca3276027afa51ab1028cf2cf))
+
 ## [1.4.0](https://github.com/kitti12911/lib-orm/compare/v1.3.0...v1.4.0) (2026-05-03)
 
 
