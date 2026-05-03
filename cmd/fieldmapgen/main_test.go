@@ -124,6 +124,8 @@ func TestVisitSkipsSeenAndMissingRelationModels(t *testing.T) {
 	assert.Contains(t, maps, "profile.address")
 	assert.NotContains(t, maps, "missing")
 	assert.Len(t, maps, 3)
+	assert.Equal(t, "profile", maps["profile"].alias)
+	assert.Equal(t, "profile__address", maps["profile.address"].alias)
 }
 
 func TestParseModelFileError(t *testing.T) {
@@ -247,7 +249,7 @@ func TestColumnsFor(t *testing.T) {
 		},
 		"profile": {
 			fields: map[string]string{"first_name": "first_name"},
-			alias:  "up",
+			alias:  "profile",
 		},
 	}
 
@@ -255,13 +257,19 @@ func TestColumnsFor(t *testing.T) {
 
 	assert.Equal(t, map[string]string{
 		"email":              "u.email",
-		"profile.first_name": "up.first_name",
+		"profile.first_name": "profile.first_name",
 	}, got)
 }
 
 func TestQualifyColumn(t *testing.T) {
 	assert.Equal(t, "u.email", qualifyColumn("u", "email"))
 	assert.Equal(t, "email", qualifyColumn("", "email"))
+}
+
+func TestQueryAlias(t *testing.T) {
+	assert.Equal(t, "u", queryAlias(model{alias: "u"}, rootNestedName))
+	assert.Equal(t, "profile", queryAlias(model{alias: "up"}, "profile"))
+	assert.Equal(t, "profile__address", queryAlias(model{alias: "ua"}, "profile.address"))
 }
 
 func TestStructTagWithoutTag(t *testing.T) {

@@ -128,7 +128,7 @@ func visit(models map[string]model, m model, nestedName string, maps map[string]
 	maps[nestedName] = fieldMap{
 		modelName: m.name,
 		fields:    m.columns,
-		alias:     m.alias,
+		alias:     queryAlias(m, nestedName),
 	}
 
 	for _, rel := range m.relations {
@@ -272,6 +272,13 @@ func qualifyColumn(alias string, column string) string {
 		return column
 	}
 	return alias + "." + column
+}
+
+func queryAlias(m model, nestedName string) string {
+	if nestedName == rootNestedName {
+		return m.alias
+	}
+	return strings.ReplaceAll(nestedName, ".", "__")
 }
 
 func structTag(field *ast.Field) reflect.StructTag {
