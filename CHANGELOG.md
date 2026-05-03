@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/kitti12911/lib-orm/compare/v1.5.0...v2.0.0) (2026-05-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* add wrapper to bun client
+
+### Features
+
+* add wrapper to bun client ([bc976a4](https://github.com/kitti12911/lib-orm/commit/bc976a4b32b8962d05ac9ca555532501ecb8c145))
+
 ## [1.5.0](https://github.com/kitti12911/lib-orm/compare/v1.4.1...v1.5.0) (2026-05-03)
 
 
