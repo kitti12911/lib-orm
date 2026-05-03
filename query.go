@@ -21,26 +21,32 @@ type OrderBy struct {
 type FilterOp string
 
 const (
-	FilterOpExact   FilterOp = "="
-	FilterOpLike    FilterOp = "LIKE"
-	FilterOpGT      FilterOp = ">"
-	FilterOpLT      FilterOp = "<"
-	FilterOpGTE     FilterOp = ">="
-	FilterOpLTE     FilterOp = "<="
-	FilterOpNull    FilterOp = "NULL"
-	FilterOpNotNull FilterOp = "NOT_NULL"
+	FilterOpExact            FilterOp = "="
+	FilterOpLike             FilterOp = "LIKE"
+	FilterOpGT               FilterOp = ">"
+	FilterOpLT               FilterOp = "<"
+	FilterOpGTE              FilterOp = ">="
+	FilterOpLTE              FilterOp = "<="
+	FilterOpNull             FilterOp = "NULL"
+	FilterOpNotNull          FilterOp = "NOT_NULL"
+	FilterOpLikeCI           FilterOp = "LIKE_CI"
+	FilterOpIn               FilterOp = "IN"
+	FilterOpBetween          FilterOp = "BETWEEN"
+	FilterOpBetweenExclusive FilterOp = "BETWEEN_EXCLUSIVE"
 )
 
 type Filter struct {
-	Col string
-	Op  FilterOp
-	Val any
+	Col  string
+	Op   FilterOp
+	Val  any
+	Vals []any
 }
 
 type ProtoFilter[O ~int32] interface {
 	GetCol() string
 	GetOp() O
 	GetVal() string
+	GetVals() []string
 }
 
 type ProtoOrderBy[O ~int32] interface {
@@ -52,9 +58,10 @@ func FiltersFromProto[T ProtoFilter[O], O ~int32](filters []T) []Filter {
 	result := make([]Filter, len(filters))
 	for i, filter := range filters {
 		result[i] = Filter{
-			Col: filter.GetCol(),
-			Op:  FilterOpFromProto(filter.GetOp()),
-			Val: filter.GetVal(),
+			Col:  filter.GetCol(),
+			Op:   FilterOpFromProto(filter.GetOp()),
+			Val:  filter.GetVal(),
+			Vals: stringsToAny(filter.GetVals()),
 		}
 	}
 	return result
@@ -87,6 +94,14 @@ func FilterOpFromProto[O ~int32](op O) FilterOp {
 		return FilterOpNull
 	case 8:
 		return FilterOpNotNull
+	case 9:
+		return FilterOpLikeCI
+	case 10:
+		return FilterOpIn
+	case 11:
+		return FilterOpBetween
+	case 12:
+		return FilterOpBetweenExclusive
 	default:
 		return FilterOpExact
 	}
@@ -109,6 +124,23 @@ func ApplyFilters(query *bun.SelectQuery, filters []Filter, columns map[string]s
 		switch filter.Op {
 		case FilterOpLike:
 			query.Where("? LIKE ?", bun.Ident(column), "%"+fmt.Sprint(filter.Val)+"%")
+		case FilterOpLikeCI:
+			query.Where("LOWER(?) LIKE LOWER(?)", bun.Ident(column), "%"+fmt.Sprint(filter.Val)+"%")
+		case FilterOpIn:
+			if len(filter.Vals) == 0 {
+				return fmt.Errorf("orm: filter op %q requires at least one value", filter.Op)
+			}
+			query.Where("? IN (?)", bun.Ident(column), bun.List(filter.Vals))
+		case FilterOpBetween:
+			if len(filter.Vals) != 2 {
+				return fmt.Errorf("orm: filter op %q requires exactly two values", filter.Op)
+			}
+			query.Where("? BETWEEN ? AND ?", bun.Ident(column), filter.Vals[0], filter.Vals[1])
+		case FilterOpBetweenExclusive:
+			if len(filter.Vals) != 2 {
+				return fmt.Errorf("orm: filter op %q requires exactly two values", filter.Op)
+			}
+			query.Where("? > ? AND ? < ?", bun.Ident(column), filter.Vals[0], bun.Ident(column), filter.Vals[1])
 		case FilterOpNull:
 			query.Where("? IS NULL", bun.Ident(column))
 		case FilterOpNotNull:
@@ -121,6 +153,18 @@ func ApplyFilters(query *bun.SelectQuery, filters []Filter, columns map[string]s
 	}
 
 	return nil
+}
+
+func stringsToAny(vals []string) []any {
+	if len(vals) == 0 {
+		return nil
+	}
+
+	result := make([]any, len(vals))
+	for i, val := range vals {
+		result[i] = val
+	}
+	return result
 }
 
 func ApplyOrderBy(query *bun.SelectQuery, orderBy []OrderBy, columns map[string]string) error {
