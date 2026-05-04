@@ -55,6 +55,13 @@ type testProtoOrderBy struct {
 func (o testProtoOrderBy) GetCol() string                    { return o.col }
 func (o testProtoOrderBy) GetOrder() testProtoOrderDirection { return o.order }
 
+type testPatchUser struct {
+	bun.BaseModel `bun:"table:users,alias:u"`
+
+	ID    string `bun:"id"`
+	Email string `bun:"email"`
+}
+
 func TestApplyFilters(t *testing.T) {
 	query := bun.NewDB(nil, pgdialect.New()).NewSelect()
 	columns := map[string]string{"email": "u.email", "age": "u.age", "status": "u.status", "created_at": "u.created_at"}
@@ -261,4 +268,38 @@ func TestApplyOrderByReturnsInvalidDirection(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `invalid order direction "bad"`)
+}
+
+func TestWritableColumns(t *testing.T) {
+	got := WritableColumns(map[string]string{
+		"id":         "id",
+		"email":      "email",
+		"created_at": "created_at",
+	}, "id", "created_at")
+
+	assert.Equal(t, map[string]string{"email": "email"}, got)
+}
+
+func TestApplyPatchFields(t *testing.T) {
+	query := bun.NewDB(nil, pgdialect.New()).NewUpdate().
+		Model((*testPatchUser)(nil)).
+		Where("id = ?", "user-id")
+
+	err := ApplyPatchFields(query, map[string]any{"email": "kit@example.com"}, map[string]string{"email": "email"})
+
+	require.NoError(t, err)
+	sql, err := query.AppendQuery(query.DB().QueryGen(), nil)
+	require.NoError(t, err)
+	assert.Contains(t, string(sql), `UPDATE "users" AS "u" SET "email" = 'kit@example.com'`)
+	assert.Contains(t, string(sql), `WHERE (id = 'user-id')`)
+}
+
+func TestApplyPatchFieldsReturnsInvalidField(t *testing.T) {
+	query := bun.NewDB(nil, pgdialect.New()).NewUpdate().
+		Model((*testPatchUser)(nil))
+
+	err := ApplyPatchFields(query, map[string]any{"missing": "x"}, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `invalid patch field "missing"`)
 }

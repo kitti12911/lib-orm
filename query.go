@@ -182,3 +182,30 @@ func ApplyOrderBy(query *bun.SelectQuery, orderBy []OrderBy, columns map[string]
 
 	return nil
 }
+
+func WritableColumns(fields map[string]string, blocked ...string) map[string]string {
+	blockedSet := make(map[string]bool, len(blocked))
+	for _, field := range blocked {
+		blockedSet[field] = true
+	}
+
+	columns := make(map[string]string, max(0, len(fields)-len(blockedSet)))
+	for field, column := range fields {
+		if blockedSet[field] {
+			continue
+		}
+		columns[field] = column
+	}
+	return columns
+}
+
+func ApplyPatchFields(query *bun.UpdateQuery, fields map[string]any, columns map[string]string) error {
+	for field, value := range fields {
+		column, ok := columns[field]
+		if !ok {
+			return fmt.Errorf("orm: invalid patch field %q", field)
+		}
+		query.Set("? = ?", bun.Ident(column), value)
+	}
+	return nil
+}
