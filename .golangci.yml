@@ -1,0 +1,133 @@
+version: "2"
+
+run:
+    timeout: 5m
+
+linters:
+    enable:
+        - bodyclose
+        - cyclop
+        - errcheck
+        - errorlint
+        - exhaustive
+        - gocritic
+        - godot
+        - gosec
+        - govet
+        - ineffassign
+        - misspell
+        - nilerr
+        - noctx
+        - prealloc
+        - revive
+        - sqlclosecheck
+        - staticcheck
+        - unconvert
+        - unparam
+        - unused
+        - wrapcheck
+
+    settings:
+        cyclop:
+            max-complexity: 15
+
+        exhaustive:
+            default-signifies-exhaustive: true
+
+        gocritic:
+            enabled-tags:
+                - diagnostic
+                - performance
+                - style
+            disabled-checks:
+                - hugeParam
+                - rangeValCopy
+
+        gosec:
+            excludes:
+                - G404
+
+        govet:
+            enable-all: true
+            disable:
+                - fieldalignment
+
+        misspell:
+            locale: US
+
+        revive:
+            rules:
+                - name: exported
+                  arguments:
+                      - disableStutteringCheck
+                - name: var-naming
+                - name: blank-imports
+                - name: context-as-argument
+                - name: error-return
+                - name: error-strings
+                - name: increment-decrement
+                - name: range
+                - name: receiver-naming
+                - name: unused-parameter
+                  disabled: true
+
+        unparam:
+            check-exported: false
+
+        wrapcheck:
+            ignore-package-globs:
+                - google.golang.org/grpc/status
+            ignore-sigs:
+                - .Errorf(
+                - errors.New(
+                - errors.Unwrap(
+                - errors.Join(
+                - .Wrap(
+                - .Wrapf(
+                - .WithMessage(
+                - .WithMessagef(
+                - .WithStack(
+
+    exclusions:
+        generated: lax
+        presets:
+            - comments
+            - common-false-positives
+            - legacy
+            - std-error-handling
+        rules:
+            - path: \.pb\.go$
+              linters:
+                  - cyclop
+                  - exhaustive
+                  - gocritic
+                  - godot
+                  - revive
+                  - wrapcheck
+            - path: graph/generated/.*\.go$
+              linters:
+                  - cyclop
+                  - gocritic
+                  - godot
+                  - wrapcheck
+            - path: _test\.go$
+              linters:
+                  - errcheck
+                  - godot
+                  - wrapcheck
+            - path: ^cmd/patchfieldgen/main\.go$
+              linters:
+                  - cyclop
+
+formatters:
+    enable:
+        - gofmt
+        - goimports
+    settings:
+        goimports:
+            local-prefixes:
+                - github.com/kitti12911/lib-orm/v2
+
+issues:
+    max-issues-per-linter: 0
+    max-same-issues: 0

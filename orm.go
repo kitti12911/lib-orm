@@ -42,9 +42,9 @@ func WithTracing(enabled bool) Option {
 }
 
 func New(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
-	options := options{}
+	cfgOptions := options{}
 	for _, opt := range opts {
-		opt(&options)
+		opt(&cfgOptions)
 	}
 
 	sqldb := sql.OpenDB(pgdriver.NewConnector(
@@ -52,11 +52,11 @@ func New(ctx context.Context, cfg Config, opts ...Option) (*DB, error) {
 		pgdriver.WithUser(cfg.User),
 		pgdriver.WithPassword(cfg.Password),
 		pgdriver.WithDatabase(cfg.Database),
-		pgdriver.WithApplicationName(options.appName),
+		pgdriver.WithApplicationName(cfgOptions.appName),
 		pgdriver.WithInsecure(cfg.Insecure),
 	))
 
-	return newWrappedDB(ctx, sqldb, cfg, options)
+	return newWrappedDB(ctx, sqldb, cfg, cfgOptions)
 }
 
 func newWrappedDB(ctx context.Context, sqldb *sql.DB, cfg Config, options options) (*DB, error) {

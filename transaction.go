@@ -3,6 +3,7 @@ package orm
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/uptrace/bun"
 )
@@ -34,7 +35,10 @@ func (db *DB) Bun() *bun.DB {
 }
 
 func (db *DB) Close() error {
-	return db.db.Close()
+	if err := db.db.Close(); err != nil {
+		return fmt.Errorf("close database: %w", err)
+	}
+	return nil
 }
 
 func (db *DB) Transaction(ctx context.Context, fn func(context.Context) error) error {
@@ -72,16 +76,21 @@ func (p *TransactionProvider) TransactionWithOptions(
 
 	tx, err := p.db.BeginTx(ctx, opts)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	txCtx := context.WithValue(ctx, txKey{db: p.db}, tx)
 	if err := fn(txCtx); err != nil {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
 }
 
 func (p *TransactionProvider) TxFromContext(ctx context.Context) (bun.Tx, bool) {

@@ -248,9 +248,9 @@ func TestNilConditions(t *testing.T) {
 	assert.Equal(t, "input.Profile != nil && input.Profile.Address != nil", got)
 }
 
-func writePatchFieldFile(t *testing.T, path string, content string) {
+func writePatchFieldFile(t *testing.T, path, content string) {
 	t.Helper()
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 }
 
 func parseSource(t *testing.T, src string) *ast.File {

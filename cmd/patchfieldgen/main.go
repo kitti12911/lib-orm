@@ -150,7 +150,7 @@ func main() {
 	if err := os.MkdirAll(filepath.Dir(*outPath), 0o755); err != nil {
 		panic(err)
 	}
-	if err := os.WriteFile(*outPath, out, 0o644); err != nil {
+	if err := os.WriteFile(*outPath, out, 0o644); err != nil { //nolint:gosec // Generated source should be readable.
 		panic(err)
 	}
 }
@@ -159,7 +159,7 @@ func parseModels(path string) (map[string]model, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse model file: %w", err)
 	}
 
 	models := make(map[string]model)
@@ -243,7 +243,7 @@ func collectFields(
 			continue
 		}
 
-		bucket, ok := bucketFor(buckets, path)
+		fieldBucket, ok := bucketFor(buckets, path)
 		if !ok {
 			continue
 		}
@@ -253,8 +253,8 @@ func collectFields(
 			key:       modelField.tag,
 			selector:  nextSelector,
 			guards:    guards,
-			mapField:  bucket.mapField,
-			validator: bucket.validator,
+			mapField:  fieldBucket.mapField,
+			validator: fieldBucket.validator,
 		})
 	}
 	return fields

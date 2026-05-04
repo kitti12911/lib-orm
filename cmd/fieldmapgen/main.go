@@ -75,15 +75,15 @@ func main() {
 			panic(fmt.Sprintf("%s model not found", rootName))
 		}
 
-		maps := map[string]fieldMap{}
-		visit(models, root, rootNestedName, maps, map[string]bool{})
+		fieldMaps := map[string]fieldMap{}
+		visit(models, root, rootNestedName, fieldMaps, map[string]bool{})
 
 		fmt.Fprintf(&buf, "const %sRootNestedName = %q\n\n", root.name, rootNestedName)
-		writeMap(&buf, root.name+"RootFields", maps[rootNestedName].fields)
+		writeMap(&buf, root.name+"RootFields", fieldMaps[rootNestedName].fields)
 		writeValidator(&buf, root.name+"Root", root.name+"RootFields")
 
-		nestedNames := make([]string, 0, len(maps))
-		for nestedName := range maps {
+		nestedNames := make([]string, 0, len(fieldMaps))
+		for nestedName := range fieldMaps {
 			if nestedName == rootNestedName {
 				continue
 			}
@@ -92,12 +92,12 @@ func main() {
 		sort.Strings(nestedNames)
 
 		for _, nestedName := range nestedNames {
-			fieldMap := maps[nestedName]
-			writeMap(&buf, fieldMap.modelName+"Fields", fieldMap.fields)
-			writeValidator(&buf, fieldMap.modelName, fieldMap.modelName+"Fields")
+			nestedFieldMap := fieldMaps[nestedName]
+			writeMap(&buf, nestedFieldMap.modelName+"Fields", nestedFieldMap.fields)
+			writeValidator(&buf, nestedFieldMap.modelName, nestedFieldMap.modelName+"Fields")
 		}
 
-		writeMap(&buf, root.name+"Columns", columnsFor(maps))
+		writeMap(&buf, root.name+"Columns", columnsFor(fieldMaps))
 		writeValidator(&buf, root.name, root.name+"Columns")
 	}
 
@@ -108,7 +108,7 @@ func main() {
 	if err := os.MkdirAll(filepath.Dir(*outPath), 0o755); err != nil {
 		panic(err)
 	}
-	if err := os.WriteFile(*outPath, out, 0o644); err != nil {
+	if err := os.WriteFile(*outPath, out, 0o644); err != nil { //nolint:gosec // Generated source should be readable.
 		panic(err)
 	}
 }
@@ -119,13 +119,13 @@ type fieldMap struct {
 	alias     string
 }
 
-func visit(models map[string]model, m model, nestedName string, maps map[string]fieldMap, seen map[string]bool) {
+func visit(models map[string]model, m model, nestedName string, fieldMaps map[string]fieldMap, seen map[string]bool) {
 	if seen[m.name] {
 		return
 	}
 	seen[m.name] = true
 
-	maps[nestedName] = fieldMap{
+	fieldMaps[nestedName] = fieldMap{
 		modelName: m.name,
 		fields:    m.columns,
 		alias:     queryAlias(m, nestedName),
@@ -145,14 +145,14 @@ func visit(models map[string]model, m model, nestedName string, maps map[string]
 		if nestedName != rootNestedName {
 			childName = nestedName + "." + childName
 		}
-		visit(models, relModel, childName, maps, seen)
+		visit(models, relModel, childName, fieldMaps, seen)
 	}
 }
 
 func parseModelDir(dir string) (map[string]model, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read model directory: %w", err)
 	}
 
 	models := make(map[string]model)
@@ -179,7 +179,7 @@ func parseModelFile(path string) (map[string]model, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse model file: %w", err)
 	}
 
 	models := make(map[string]model)
@@ -253,9 +253,9 @@ func parseModel(name string, strct *ast.StructType) (model, bool) {
 	return m, m.table != ""
 }
 
-func columnsFor(maps map[string]fieldMap) map[string]string {
+func columnsFor(fieldMaps map[string]fieldMap) map[string]string {
 	columns := make(map[string]string)
-	for nestedName, fieldMap := range maps {
+	for nestedName, fieldMap := range fieldMaps {
 		for field, column := range fieldMap.fields {
 			key := field
 			if nestedName != rootNestedName {
@@ -267,7 +267,7 @@ func columnsFor(maps map[string]fieldMap) map[string]string {
 	return columns
 }
 
-func qualifyColumn(alias string, column string) string {
+func qualifyColumn(alias, column string) string {
 	if alias == "" {
 		return column
 	}
@@ -288,7 +288,7 @@ func structTag(field *ast.Field) reflect.StructTag {
 	return reflect.StructTag(strings.Trim(field.Tag.Value, "`"))
 }
 
-func tagOptionValue(tag string, key string) string {
+func tagOptionValue(tag, key string) string {
 	for opt := range strings.SplitSeq(tag, ",") {
 		if value, ok := strings.CutPrefix(opt, key+":"); ok {
 			return value
@@ -335,7 +335,7 @@ func writeMap(buf *bytes.Buffer, name string, fields map[string]string) {
 	buf.WriteString("}\n\n")
 }
 
-func writeValidator(buf *bytes.Buffer, name string, mapName string) {
+func writeValidator(buf *bytes.Buffer, name, mapName string) {
 	fmt.Fprintf(buf, "func Is%sField(field string) bool {\n", name)
 	fmt.Fprintf(buf, "\t_, ok := %s[field]\n", mapName)
 	buf.WriteString("\treturn ok\n")

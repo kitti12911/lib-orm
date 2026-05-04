@@ -285,7 +285,7 @@ func parseSource(t *testing.T, src string) *ast.File {
 	return file
 }
 
-func writeFile(t *testing.T, path string, contents string) {
+func writeFile(t *testing.T, path, contents string) {
 	t.Helper()
 
 	require.NoError(t, os.WriteFile(path, []byte(strings.TrimSpace(contents)), 0o600))
