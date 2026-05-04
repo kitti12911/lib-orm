@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/kitti12911/lib-orm/compare/v2.1.0...v2.2.0) (2026-05-04)
+
+
+### Features
+
+* add patchfieldgen ([ba48b36](https://github.com/kitti12911/lib-orm/commit/ba48b363ab3d89ac92b601e40c08862b16ab4c7a))
+
 ## [2.1.0](https://github.com/kitti12911/lib-orm/compare/v2.0.0...v2.1.0) (2026-05-04)
 
 
