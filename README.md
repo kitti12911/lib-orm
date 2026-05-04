@@ -2,10 +2,25 @@
 
 shared Bun ORM helpers for homelab services.
 
+## project structure
+
+```bash
+lib-orm/
+├── cmd/
+│   ├── fieldmapgen/      # Bun model field-map generator
+│   └── patchfieldgen/    # field-mask patch extractor generator
+├── orm.go                # database setup, migrations, fixtures
+├── query.go              # filter, order, and patch query helpers
+├── transaction.go        # context-aware transaction provider
+├── Makefile
+├── go.mod
+└── README.md
+```
+
 ## install
 
 ```bash
-go get github.com/kitti12911/lib-orm
+go get github.com/kitti12911/lib-orm/v2
 ```
 
 ## packages
@@ -15,7 +30,7 @@ go get github.com/kitti12911/lib-orm
 PostgreSQL connection setup, Bun model registration, OpenTelemetry query hooks, migrations, and fixture loading.
 
 ```go
-import orm "github.com/kitti12911/lib-orm"
+import orm "github.com/kitti12911/lib-orm/v2"
 
 db, err := orm.New(
     ctx,
@@ -68,4 +83,102 @@ _, err := txProvider.IDB(ctx).NewUpdate().
     Set("updated_at = now()").
     Where("id = ?", id).
     Exec(ctx)
+```
+
+### query helpers
+
+Reusable Bun query helpers for validated filtering, ordering, and patch
+updates.
+
+```go
+filters := orm.FiltersFromProto(req.GetFilters())
+orderBy := orm.OrderByFromProto(req.GetOrderBy())
+
+query := db.IDB(ctx).NewSelect().Model(&users)
+
+if err := orm.ApplyFilters(query, filters, fieldmap.UserRootFields); err != nil {
+    return err
+}
+if err := orm.ApplyOrderBy(query, orderBy, fieldmap.UserRootFields); err != nil {
+    return err
+}
+```
+
+`ApplyFilters` and `ApplyOrderBy` only accept fields present in the provided
+field map. Column names are emitted with `bun.Ident`, and values stay
+parameterized through Bun.
+
+Supported filter operators:
+
+- exact
+- like
+- case-insensitive like
+- greater than / less than / greater-or-equal / less-or-equal
+- null / not null
+- in
+- between
+- exclusive between
+
+For patch updates, build writable columns from a generated field map and block
+immutable fields:
+
+```go
+columns := orm.WritableColumns(
+    fieldmap.UserRootFields,
+    "id",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+)
+
+query := db.IDB(ctx).NewUpdate().Model((*models.User)(nil)).Where("id = ?", id)
+if err := orm.ApplyPatchFields(query, fields, columns); err != nil {
+    return err
+}
+```
+
+### generators
+
+`fieldmapgen` generates Bun-aware field maps and validation helpers from model
+structs:
+
+```bash
+go run github.com/kitti12911/lib-orm/v2/cmd/fieldmapgen@v2.2.0 \
+    -model-dir internal/database \
+    -root User \
+    -out gen/database/fieldmap_generated.go \
+    -package database
+```
+
+`patchfieldgen` generates field-mask extraction code for PATCH handlers. It
+maps request paths into table-specific field buckets and can copy nested request
+values for create-if-missing flows:
+
+```bash
+go run github.com/kitti12911/lib-orm/v2/cmd/patchfieldgen@v2.2.0 \
+    -file internal/feature/user/user.go \
+    -root CreateParams \
+    -out internal/feature/user/patch_generated.go \
+    -package user \
+    -fieldmap-import grpc-sandbox/gen/database \
+    -root-selector params.User \
+    -paths-selector params.Fields \
+    -bucket root:userFields:fieldmap.IsUserRootField \
+    -bucket profile:profileFields:fieldmap.IsUserProfileField \
+    -bucket profile.address:addressFields:fieldmap.IsUserAddressField \
+    -copy params.User.Profile:data.profile \
+    -copy params.User.Profile.Address:data.address:params.User.Profile
+```
+
+## requirements
+
+- go 1.26 or higher
+
+## available commands
+
+```bash
+make tidy
+make fmt
+make test
+make cov
 ```
