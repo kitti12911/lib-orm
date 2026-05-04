@@ -41,10 +41,32 @@ db, err := orm.New(
 )
 ```
 
+`orm.New` returns a wrapped database value. Use `db.Bun()` only when a caller
+really needs the raw `*bun.DB`; otherwise prefer `db.IDB(ctx)` so repository
+queries automatically use the active transaction when one exists.
+
 Run service-owned migrations and fixtures:
 
 ```go
 err = orm.Init(ctx, db, cfg.Database, migrations.Migrations, seeders.Fixtures, "fixtures/users.yml")
+```
+
+If migration and fixture loading need to be controlled separately:
+
+```go
+if err := orm.RunMigrations(ctx, db.Bun(), migrations.Migrations); err != nil {
+    return err
+}
+if err := orm.LoadFixtures(ctx, db.Bun(), seeders.Fixtures, "fixtures/users.yml"); err != nil {
+    return err
+}
+```
+
+Wrap an existing Bun connection when another package already created it:
+
+```go
+db := orm.Wrap(existingBunDB)
+defer db.Close()
 ```
 
 Create one transaction provider at composition time:
@@ -150,6 +172,18 @@ go run github.com/kitti12911/lib-orm/v2/cmd/fieldmapgen@v2.2.0 \
     -package database
 ```
 
+Flag guide:
+
+- `-model-dir`: directory containing Bun model structs.
+- `-root`: root model name to walk from, for example `User`.
+- `-out`: generated output file.
+- `-package`: package name for the generated file.
+
+Generated output gives you maps such as `UserRootFields`,
+`UserProfileFields`, and validator functions such as `IsUserRootField`. Query
+helpers use these maps to validate filter, order, and patch field names before
+building SQL.
+
 `patchfieldgen` generates field-mask extraction code for PATCH handlers. It
 maps request paths into table-specific field buckets and can copy nested request
 values for create-if-missing flows:
@@ -169,6 +203,67 @@ go run github.com/kitti12911/lib-orm/v2/cmd/patchfieldgen@v2.2.0 \
     -copy params.User.Profile:data.profile \
     -copy params.User.Profile.Address:data.address:params.User.Profile
 ```
+
+Flag guide:
+
+- `-file`: Go source file containing the patch input structs.
+- `-root`: root struct type to inspect. In `grpc-sandbox`, this is
+  `CreateParams` because PATCH accepts the same editable user shape.
+- `-out`: generated output file.
+- `-package`: package name for the generated file.
+- `-fieldmap-import`: import path for generated field-map validators.
+- `-root-selector`: selector for the request data inside the generated
+  function. If the generated function is `patchFields(params PatchParams)` and
+  values live at `params.User`, use `params.User`.
+- `-paths-selector`: selector for field mask paths. In `grpc-sandbox`, this is
+  `params.Fields`.
+- `-bucket`: route field mask paths into table-specific output maps.
+- `-copy`: copy nested pointer values from the request into patch data.
+
+Bucket format:
+
+```text
+path_prefix:output_map:validator_func
+```
+
+Example:
+
+```bash
+-bucket profile.address:addressFields:fieldmap.IsUserAddressField
+```
+
+This means paths like `profile.address.city` go into `data.addressFields`, and
+the final key `city` must pass `fieldmap.IsUserAddressField("city")`.
+
+Use `root` as the prefix for top-level fields:
+
+```bash
+-bucket root:userFields:fieldmap.IsUserRootField
+```
+
+Copy format:
+
+```text
+source_pointer:target_value[:guard_pointer,guard_pointer]
+```
+
+Example:
+
+```bash
+-copy params.User.Profile.Address:data.address:params.User.Profile
+```
+
+This generates a guarded copy:
+
+```go
+if params.User.Profile != nil && params.User.Profile.Address != nil {
+    data.address = *params.User.Profile.Address
+}
+```
+
+Use `-copy` when service code may need the full nested value, usually to create
+a missing child row before applying PATCH field updates. Buckets are for SQL
+field maps; copies are for carrying nested create data.
 
 ## requirements
 
