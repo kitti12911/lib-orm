@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/kitti12911/lib-orm/compare/v2.0.0...v2.1.0) (2026-05-04)
+
+
+### Features
+
+* add patch related function ([ea2db74](https://github.com/kitti12911/lib-orm/commit/ea2db748acf820ab58cdaf975769b1cf69d897c0))
+
 ## [2.0.0](https://github.com/kitti12911/lib-orm/compare/v1.5.0...v2.0.0) (2026-05-03)
 
 
