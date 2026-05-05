@@ -64,6 +64,17 @@ jobs:
             - name: Test with race detector and coverage
               run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
+            - name: Show coverage
+              run: |
+                  go tool cover -func=coverage.out
+                  {
+                      echo "## Go coverage"
+                      echo
+                      echo '```text'
+                      go tool cover -func=coverage.out
+                      echo '```'
+                  } >> "${GITHUB_STEP_SUMMARY}"
+
     security:
         name: Security
         runs-on: ubuntu-latest
