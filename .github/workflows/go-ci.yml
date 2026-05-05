@@ -66,12 +66,13 @@ jobs:
 
             - name: Show coverage
               run: |
-                  go tool cover -func=coverage.out
+                  coverage_total="$(go tool cover -func=coverage.out | tail -n 1)"
+                  echo "${coverage_total}"
                   {
                       echo "## Go coverage"
                       echo
                       echo '```text'
-                      go tool cover -func=coverage.out
+                      echo "${coverage_total}"
                       echo '```'
                   } >> "${GITHUB_STEP_SUMMARY}"
 
