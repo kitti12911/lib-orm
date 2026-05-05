@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/kitti12911/lib-orm/compare/v2.2.0...v2.3.0) (2026-05-04)
+
+
+### Features
+
+* add lint/security/test check ([3c42cbb](https://github.com/kitti12911/lib-orm/commit/3c42cbbd0695308ffb38f9f3c92dee863114517b))
+
 ## [2.2.0](https://github.com/kitti12911/lib-orm/compare/v2.1.0...v2.2.0) (2026-05-04)
 
 
