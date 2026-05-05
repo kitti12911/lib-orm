@@ -275,11 +275,12 @@ Optional:
 
 ## available commands
 
-```bash
-make tidy
-make fmt
-make pretty
-make format
-make test
-make cov
-```
+| Command       | Description                                     |
+| ------------- | ----------------------------------------------- |
+| `make tidy`   | Run `go mod tidy`                               |
+| `make fmt`    | Format Go code with `go fmt`                    |
+| `make pretty` | Format Markdown, YAML, JSON, and JSONC          |
+| `make format` | Run Go and document/config formatting           |
+| `make test`   | Run tests with the race detector                |
+| `make cov`    | Generate and open an HTML coverage report       |
+| `make fix`    | Apply standard Go source rewrites with `go fix` |
