@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.0](https://github.com/kitti12911/lib-orm/compare/v2.3.0...v2.4.0) (2026-05-06)
+
+
+### Features
+
+* release please will check if go ci is success or not before per… ([#14](https://github.com/kitti12911/lib-orm/issues/14)) ([7dee7f0](https://github.com/kitti12911/lib-orm/commit/7dee7f05bd0982c8eeae659de0f0724541d93585))
+
 ## [2.3.0](https://github.com/kitti12911/lib-orm/compare/v2.2.0...v2.3.0) (2026-05-04)
 
 
