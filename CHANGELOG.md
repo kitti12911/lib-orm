@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.0](https://github.com/kitti12911/lib-orm/compare/v2.4.0...v2.5.0) (2026-05-06)
+
+
+### Features
+
+* add pipeline cancellation when new pipeline in same branch detected ([#16](https://github.com/kitti12911/lib-orm/issues/16)) ([8915f1d](https://github.com/kitti12911/lib-orm/commit/8915f1d88865342181c67ee66a75aa758dc8082c))
+
 ## [2.4.0](https://github.com/kitti12911/lib-orm/compare/v2.3.0...v2.4.0) (2026-05-06)
 
 
