@@ -5,7 +5,10 @@ on:
         branches:
             - main
         paths:
+            - ".github/release-please*.json"
             - ".github/workflows/go-ci.yml"
+            - ".github/workflows/release.yml"
+            - "CHANGELOG.md"
             - ".golangci.yml"
             - "Makefile"
             - "go.mod"
@@ -13,7 +16,10 @@ on:
             - "**/*.go"
     pull_request:
         paths:
+            - ".github/release-please*.json"
             - ".github/workflows/go-ci.yml"
+            - ".github/workflows/release.yml"
+            - "CHANGELOG.md"
             - ".golangci.yml"
             - "Makefile"
             - "go.mod"
