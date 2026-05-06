@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.0](https://github.com/kitti12911/lib-orm/compare/v2.5.0...v2.6.0) (2026-05-06)
+
+
+### Features
+
+* apply 'security-toolchain' to reduce actions time ([#18](https://github.com/kitti12911/lib-orm/issues/18)) ([2e3efd2](https://github.com/kitti12911/lib-orm/commit/2e3efd28a26baaabe50dce43b9d80ea143109515))
+
 ## [2.5.0](https://github.com/kitti12911/lib-orm/compare/v2.4.0...v2.5.0) (2026-05-06)
 
 
