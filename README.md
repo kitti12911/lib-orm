@@ -278,6 +278,7 @@ Optional:
 | Command       | Description                                     |
 | ------------- | ----------------------------------------------- |
 | `make tidy`   | Run `go mod tidy`                               |
+| `make lint`   | Run Go and Markdown linting                     |
 | `make fmt`    | Format Go code with `go fmt`                    |
 | `make pretty` | Format Markdown, YAML, JSON, and JSONC          |
 | `make format` | Run Go and document/config formatting           |
