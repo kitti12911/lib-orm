@@ -92,7 +92,7 @@ jobs:
         name: Toolchain Security
         runs-on: ubuntu-latest
         container:
-            image: zot.kittiaccess.work/kitti12911/security-toolchain@sha256:216b1bfb7a3d0955a4c1a7ffb5ab2b3203d8fd538f1b8e181668e1dd88135571
+            image: zot.kittiaccess.work/kitti12911/security-toolchain@sha256:e05509dad7e83d8f54bbf648584ab89e6aabd6d07adff200bea2180bba702e49
             credentials:
                 username: ${{ secrets.ZOT_USERNAME }}
                 password: ${{ secrets.ZOT_TOKEN }}
