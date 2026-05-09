@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.0](https://github.com/kitti12911/lib-orm/compare/v2.6.0...v2.7.0) (2026-05-09)
+
+
+### Features
+
+* update toolchain ([b4a6bc0](https://github.com/kitti12911/lib-orm/commit/b4a6bc03f1ca6fc3324a92af2ca9b8d87c064e98))
+
 ## [2.6.0](https://github.com/kitti12911/lib-orm/compare/v2.5.0...v2.6.0) (2026-05-06)
 
 
