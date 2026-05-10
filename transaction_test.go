@@ -59,6 +59,21 @@ func TestTransactionProviderBeginError(t *testing.T) {
 	require.ErrorIs(t, err, beginErr)
 }
 
+func TestTransactionProviderCommitError(t *testing.T) {
+	db, mock := newMockBunDB(t)
+	defer db.Close()
+
+	commitErr := errors.New("commit failed")
+	mock.ExpectBegin()
+	mock.ExpectCommit().WillReturnError(commitErr)
+
+	provider := NewTransactionProvider(db)
+	err := provider.Transaction(context.Background(), func(context.Context) error {
+		return nil
+	})
+	require.ErrorIs(t, err, commitErr)
+}
+
 func TestDBWrapper(t *testing.T) {
 	bunDB, mock := newMockBunDB(t)
 
