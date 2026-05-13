@@ -29,9 +29,11 @@ jobs:
     markdownlint:
         name: Markdownlint
         runs-on: ubuntu-latest
+        container:
+            image: node:24.10.0-bookworm@sha256:06e54ecf113a30f0ff9a1d309866a5924d3bda4389eab11a0e1e92f3251d915d
         steps:
             # actions/checkout v6.0.2
             - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-            # DavidAnson/markdownlint-cli2-action v23.1.0
-            - uses: DavidAnson/markdownlint-cli2-action@6b51ade7a9e4a75a7ad929842dd298a3804ebe8b
+            - name: Run markdownlint-cli2
+              run: ./scripts/ci/markdownlint.sh

@@ -4,6 +4,27 @@ tidy:
 
 lint: vet golangci-lint markdownlint
 
+ci-lint:
+	./scripts/ci/go-lint.sh
+
+ci-test:
+	./scripts/ci/go-test.sh
+
+ci-security:
+	./scripts/ci/security-scan.sh
+
+ci-supply-chain:
+	./scripts/ci/supply-chain-scan.sh
+
+ci-markdownlint:
+	./scripts/ci/markdownlint.sh
+
+release-plan:
+	./scripts/ci/semantic-release-plan.sh
+
+release-publish:
+	./scripts/ci/semantic-release-publish.sh
+
 vet:
 	go vet ./...
 
@@ -11,7 +32,7 @@ golangci-lint:
 	golangci-lint run --timeout=5m
 
 markdownlint:
-	markdownlint-cli2
+	./scripts/ci/markdownlint.sh
 
 fmt:
 	go fmt ./...

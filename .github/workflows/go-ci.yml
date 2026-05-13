@@ -5,26 +5,28 @@ on:
         branches:
             - main
         paths:
-            - ".github/release-please*.json"
             - ".github/workflows/go-ci.yml"
             - ".github/workflows/release.yml"
             - "CHANGELOG.md"
             - ".golangci.yml"
             - "Makefile"
+            - "release.config.cjs"
             - "go.mod"
             - "go.sum"
+            - "scripts/ci/**"
             - "**/*.go"
             - "!README.md"
     pull_request:
         paths:
-            - ".github/release-please*.json"
             - ".github/workflows/go-ci.yml"
             - ".github/workflows/release.yml"
             - "CHANGELOG.md"
             - ".golangci.yml"
             - "Makefile"
+            - "release.config.cjs"
             - "go.mod"
             - "go.sum"
+            - "scripts/ci/**"
             - "**/*.go"
             - "!README.md"
 
@@ -39,42 +41,34 @@ jobs:
     lint:
         name: Lint
         runs-on: ubuntu-latest
+        container:
+            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/image-toolchain@sha256:8a572db163ebfc8be73aad53ae236c8e7e41275aa8dca741f68699cca01dec79
+            credentials:
+                username: ${{ secrets.TOOLCHAIN_REGISTRY_USERNAME }}
+                password: ${{ secrets.TOOLCHAIN_REGISTRY_PASSWORD }}
         steps:
             # actions/checkout v6.0.2
             - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-            # actions/setup-go v6.4.0
-            - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
-              with:
-                  go-version-file: go.mod
-                  cache: true
-                  cache-dependency-path: go.sum
-
-            - name: Go vet
-              run: go vet ./...
-
-            # golangci/golangci-lint-action v9.2.0
-            - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20
-              with:
-                  version: v2.12.1
-                  args: --timeout=5m
+            - name: Lint Go code
+              run: ./scripts/ci/go-lint.sh
 
     test:
         name: Test
         runs-on: ubuntu-latest
+        container:
+            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/image-toolchain@sha256:8a572db163ebfc8be73aad53ae236c8e7e41275aa8dca741f68699cca01dec79
+            credentials:
+                username: ${{ secrets.TOOLCHAIN_REGISTRY_USERNAME }}
+                password: ${{ secrets.TOOLCHAIN_REGISTRY_PASSWORD }}
         steps:
             # actions/checkout v6.0.2
             - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-            # actions/setup-go v6.4.0
-            - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
-              with:
-                  go-version-file: go.mod
-                  cache: true
-                  cache-dependency-path: go.sum
-
-            - name: Test with race detector and coverage
-              run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+            - name: Test with coverage
+              run: ./scripts/ci/go-test.sh
+              env:
+                  GO_TEST_RACE: false
 
             - name: Show coverage
               run: |
@@ -92,42 +86,32 @@ jobs:
         name: Toolchain Security
         runs-on: ubuntu-latest
         container:
-            image: zot.kittiaccess.work/kitti12911/security-toolchain@sha256:e05509dad7e83d8f54bbf648584ab89e6aabd6d07adff200bea2180bba702e49
+            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/security-toolchain@sha256:8d9ac476645f6c3deef5269ff9ad35ba3fd52133f748cf57d99490ff2dd4af95
             credentials:
-                username: ${{ secrets.ZOT_USERNAME }}
-                password: ${{ secrets.ZOT_TOKEN }}
+                username: ${{ secrets.TOOLCHAIN_REGISTRY_USERNAME }}
+                password: ${{ secrets.TOOLCHAIN_REGISTRY_PASSWORD }}
         steps:
             # actions/checkout v6.0.2
             - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
               with:
                   fetch-depth: 0
 
-            - name: govulncheck
-              run: govulncheck ./...
-
-            - name: Semgrep
-              run: semgrep scan --config=p/golang --config=p/secrets --error
+            - name: govulncheck and Semgrep
+              run: ./scripts/ci/security-scan.sh
 
     security:
-        name: Security
+        name: Supply Chain Security
         runs-on: ubuntu-latest
+        container:
+            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/supply-chain-toolchain@sha256:cba0f82bcc1ef52c2d16c02e846705c656f568b3406e9705ef9b46bfb61667cc
+            credentials:
+                username: ${{ secrets.TOOLCHAIN_REGISTRY_USERNAME }}
+                password: ${{ secrets.TOOLCHAIN_REGISTRY_PASSWORD }}
         steps:
             # actions/checkout v6.0.2
             - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
               with:
                   fetch-depth: 0
 
-            # aquasecurity/trivy-action v0.36.0
-            - uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8
-              with:
-                  scan-type: fs
-                  scan-ref: .
-                  scanners: vuln,secret,misconfig
-                  exit-code: 1
-                  severity: CRITICAL,HIGH
-                  ignore-unfixed: true
-
-            # gitleaks/gitleaks-action v2.3.9
-            - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Trivy and Gitleaks
+              run: ./scripts/ci/supply-chain-scan.sh

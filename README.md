@@ -23,6 +23,33 @@ lib-orm/
 go get github.com/kitti12911/lib-orm/v2
 ```
 
+## ci commands
+
+reusable CI entrypoints live in `scripts/ci/` so GitHub Actions and GitLab CI
+can call the same commands with provider-specific orchestration around them.
+
+| command                                    | purpose                           |
+| ------------------------------------------ | --------------------------------- |
+| `./scripts/ci/go-lint.sh`                  | run `go vet` and `golangci-lint`  |
+| `./scripts/ci/go-test.sh`                  | run tests with coverage           |
+| `./scripts/ci/markdownlint.sh`             | run Markdown linting              |
+| `./scripts/ci/security-scan.sh`            | run `govulncheck` and Semgrep     |
+| `./scripts/ci/supply-chain-scan.sh`        | run Trivy and Gitleaks            |
+| `./scripts/ci/semantic-release-plan.sh`    | preview the next semantic release |
+| `./scripts/ci/semantic-release-publish.sh` | publish the semantic release      |
+
+GitHub Actions uses `TOOLCHAIN_REGISTRY` and `TOOLCHAIN_IMAGE_NAMESPACE` to
+resolve the shared toolchain images. GitLab should map its CI variables and
+image credentials to the same script inputs instead of duplicating the command
+logic.
+The current semantic-release config publishes GitHub releases; GitLab release
+publishing also needs `@semantic-release/gitlab` in the release toolchain and a
+GitLab-specific release config.
+
+`GO_TEST_RACE=true` or `GO_TEST_CGO=true` requires a C compiler in the selected
+toolchain image. `lib-orm` sets `GO_TEST_RACE=false` in GitHub Actions while
+using `image-toolchain` v1.0.1 because that image does not include one.
+
 ## packages
 
 ### orm
