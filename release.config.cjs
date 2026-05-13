@@ -1,3 +1,23 @@
+const isGitLab = process.env.GITLAB_CI === "true";
+
+const providerPlugin = isGitLab
+    ? [
+          "@semantic-release/gitlab",
+          {
+              successComment: false,
+              failComment: false,
+              labels: false
+          }
+      ]
+    : [
+          "@semantic-release/github",
+          {
+              successComment: false,
+              failComment: false,
+              releasedLabels: false
+          }
+      ];
+
 module.exports = {
     branches: ["main"],
     tagFormat: "v${version}",
@@ -7,7 +27,11 @@ module.exports = {
             {
                 preset: "conventionalcommits",
                 parserOpts: {
-                    noteKeywords: ["BREAKING CHANGE", "BREAKING CHANGES", "BREAKING"]
+                    noteKeywords: [
+                        "BREAKING CHANGE",
+                        "BREAKING CHANGES",
+                        "BREAKING"
+                    ]
                 },
                 releaseRules: [
                     {
@@ -50,17 +74,14 @@ module.exports = {
             {
                 preset: "conventionalcommits",
                 parserOpts: {
-                    noteKeywords: ["BREAKING CHANGE", "BREAKING CHANGES", "BREAKING"]
+                    noteKeywords: [
+                        "BREAKING CHANGE",
+                        "BREAKING CHANGES",
+                        "BREAKING"
+                    ]
                 }
             }
         ],
-        [
-            "@semantic-release/github",
-            {
-                successComment: false,
-                failComment: false,
-                releasedLabels: false
-            }
-        ]
+        providerPlugin
     ]
 };

@@ -13,7 +13,14 @@ fi
 log_file="${SEMANTIC_RELEASE_LOG:-${RUNNER_TEMP:-/tmp}/semantic-release-dry-run.log}"
 
 set +e
-semantic-release --dry-run >"${log_file}" 2>&1
+npx --yes \
+	--package semantic-release@25.0.3 \
+	--package @semantic-release/commit-analyzer@13.0.1 \
+	--package @semantic-release/release-notes-generator@14.1.1 \
+	--package @semantic-release/github@12.0.8 \
+	--package @semantic-release/gitlab@13.3.2 \
+	--package conventional-changelog-conventionalcommits@9.3.1 \
+	semantic-release --dry-run >"${log_file}" 2>&1
 status="$?"
 set -e
 

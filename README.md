@@ -39,16 +39,26 @@ can call the same commands with provider-specific orchestration around them.
 | `./scripts/ci/semantic-release-publish.sh` | publish the semantic release      |
 
 GitHub Actions uses `TOOLCHAIN_REGISTRY` and `TOOLCHAIN_IMAGE_NAMESPACE` to
-resolve the shared toolchain images. GitLab should map its CI variables and
-image credentials to the same script inputs instead of duplicating the command
-logic.
-The current semantic-release config publishes GitHub releases; GitLab release
-publishing also needs `@semantic-release/gitlab` in the release toolchain and a
-GitLab-specific release config.
+resolve the shared Zot toolchain images. GitLab CI uses full image-reference
+variables so the private mirror can point at Harbor without changing these
+scripts:
+
+| GitLab variable                   | purpose                                     |
+| --------------------------------- | ------------------------------------------- |
+| `CI_IMAGE_TOOLCHAIN_IMAGE`        | image for Go lint and test jobs             |
+| `CI_SECURITY_TOOLCHAIN_IMAGE`     | image for `govulncheck` and Semgrep         |
+| `CI_SUPPLY_CHAIN_TOOLCHAIN_IMAGE` | image for Trivy and Gitleaks                |
+| `CI_RELEASE_TOOLCHAIN_IMAGE`      | image for Markdownlint and semantic-release |
+| `GITLAB_AMD64_RUNNER_TAG`         | optional runner tag override                |
+| `GL_TOKEN` or `GITLAB_TOKEN`      | GitLab semantic-release API/write token     |
+
+`release.config.cjs` selects the GitHub or GitLab semantic-release plugin from
+the `GITLAB_CI` environment flag, so GitHub and GitLab can publish releases
+from the same repository files.
 
 `GO_TEST_RACE=true` or `GO_TEST_CGO=true` requires a C compiler in the selected
 toolchain image. `lib-orm` sets `GO_TEST_RACE=false` in GitHub Actions while
-using `image-toolchain` v1.0.1 because that image does not include one.
+using `image-toolchain` v1.1.0 because that image does not include one.
 
 ## packages
 
