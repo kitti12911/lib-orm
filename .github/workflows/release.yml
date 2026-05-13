@@ -19,7 +19,7 @@ jobs:
         runs-on: ubuntu-latest
         if: github.event.workflow_run.conclusion == 'success'
         container:
-            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/release-toolchain@sha256:1e3dbdc05352d1a7655f5853c3d1085c7f1f790f949d9bbe39030cde7c3682de
+            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/release-toolchain@sha256:aaba512b7e0bce0b866ce97ff6eb3cb27b7a58ba4cb4995c9fa64af571850193
             credentials:
                 username: ${{ secrets.TOOLCHAIN_REGISTRY_USERNAME }}
                 password: ${{ secrets.TOOLCHAIN_REGISTRY_PASSWORD }}

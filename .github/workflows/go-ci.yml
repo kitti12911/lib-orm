@@ -42,7 +42,7 @@ jobs:
         name: Lint
         runs-on: ubuntu-latest
         container:
-            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/image-toolchain@sha256:8a572db163ebfc8be73aad53ae236c8e7e41275aa8dca741f68699cca01dec79
+            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/image-toolchain@sha256:55e03f1a59c20fbd37a400a95924be84fbd1814db2bf511c4fdb3fdefbcf6b2c
             credentials:
                 username: ${{ secrets.TOOLCHAIN_REGISTRY_USERNAME }}
                 password: ${{ secrets.TOOLCHAIN_REGISTRY_PASSWORD }}
@@ -57,7 +57,7 @@ jobs:
         name: Test
         runs-on: ubuntu-latest
         container:
-            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/image-toolchain@sha256:8a572db163ebfc8be73aad53ae236c8e7e41275aa8dca741f68699cca01dec79
+            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/image-toolchain@sha256:55e03f1a59c20fbd37a400a95924be84fbd1814db2bf511c4fdb3fdefbcf6b2c
             credentials:
                 username: ${{ secrets.TOOLCHAIN_REGISTRY_USERNAME }}
                 password: ${{ secrets.TOOLCHAIN_REGISTRY_PASSWORD }}
@@ -86,7 +86,7 @@ jobs:
         name: Toolchain Security
         runs-on: ubuntu-latest
         container:
-            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/security-toolchain@sha256:8d9ac476645f6c3deef5269ff9ad35ba3fd52133f748cf57d99490ff2dd4af95
+            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/security-toolchain@sha256:b36a3062657cd9375045051ef5b45a41f099b317935c00002f6b86238d7d0089
             credentials:
                 username: ${{ secrets.TOOLCHAIN_REGISTRY_USERNAME }}
                 password: ${{ secrets.TOOLCHAIN_REGISTRY_PASSWORD }}
@@ -103,7 +103,7 @@ jobs:
         name: Supply Chain Security
         runs-on: ubuntu-latest
         container:
-            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/supply-chain-toolchain@sha256:cba0f82bcc1ef52c2d16c02e846705c656f568b3406e9705ef9b46bfb61667cc
+            image: ${{ vars.TOOLCHAIN_REGISTRY }}/${{ vars.TOOLCHAIN_IMAGE_NAMESPACE }}/supply-chain-toolchain@sha256:4926af9cfd6d277e131c7b990f4bba10895085b268a67cb7045284006478f997
             credentials:
                 username: ${{ secrets.TOOLCHAIN_REGISTRY_USERNAME }}
                 password: ${{ secrets.TOOLCHAIN_REGISTRY_PASSWORD }}
