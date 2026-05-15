@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -87,12 +88,12 @@ func run(args []string) error {
 	fs.Var(&bucketFlags, "bucket", "bucket mapping as path_prefix:data_map_field:validator_func; use root for top-level fields; repeatable")
 	fs.Var(&copyFlags, "copy", "optional copy rule as pointer_source:target[:guard,guard]; emits guarded pointer copy; repeatable")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 
 	if *filePath == "" || *rootName == "" || *outPath == "" || *packageName == "" ||
 		*fieldMapImport == "" || *rootSelector == "" || *pathsSelector == "" || len(bucketFlags) == 0 {
-		return fmt.Errorf("file, root, out, package, fieldmap-import, root-selector, paths-selector, and bucket are required")
+		return errors.New("file, root, out, package, fieldmap-import, root-selector, paths-selector, and bucket are required")
 	}
 
 	models, err := parseModels(*filePath)
@@ -160,7 +161,7 @@ func run(args []string) error {
 	if err := os.MkdirAll(filepath.Dir(*outPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-	if err := writeFileAtomic(*outPath, out, 0o644); err != nil {
+	if err := writeFileAtomic(*outPath, out); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 	return nil
@@ -168,28 +169,31 @@ func run(args []string) error {
 
 // writeFileAtomic writes data to path by first writing to a temp file in the
 // same directory and renaming on success, so a failed write never leaves a
-// partial file at path.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+// partial file at path. The output file mode is 0o644.
+func writeFileAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".patchfieldgen-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) //nolint:errcheck // best-effort cleanup; rename removes the file on success
 
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close() //nolint:errcheck // already failing
-		return err
+		return fmt.Errorf("write temp file: %w", err)
 	}
-	if err := tmp.Chmod(perm); err != nil {
+	if err := tmp.Chmod(0o644); err != nil {
 		tmp.Close() //nolint:errcheck // already failing
-		return err
+		return fmt.Errorf("chmod temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return fmt.Errorf("close temp file: %w", err)
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
 }
 
 func parseModels(path string) (map[string]model, error) {

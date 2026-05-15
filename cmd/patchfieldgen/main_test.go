@@ -320,7 +320,8 @@ func TestRunErrors(t *testing.T) {
 type PatchBody struct { Email string `+"`field:\"email\"`"+` }
 `)
 	validArgs := func(overrides ...string) []string {
-		args := []string{
+		args := make([]string, 0, 16+len(overrides))
+		args = append(args,
 			"-file", validSrc,
 			"-root", "PatchBody",
 			"-out", filepath.Join(t.TempDir(), "out.go"),
@@ -329,7 +330,7 @@ type PatchBody struct { Email string `+"`field:\"email\"`"+` }
 			"-root-selector", "params.Payload",
 			"-paths-selector", "params.Fields",
 			"-bucket", "root:rootFields:fieldmap.IsRootField",
-		}
+		)
 		return append(args, overrides...)
 	}
 
@@ -430,7 +431,7 @@ func TestMainExitsOnError(t *testing.T) {
 		main()
 		return
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=TestMainExitsOnError")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestMainExitsOnError") //nolint:gosec // os.Args[0] is the test binary path
 	cmd.Env = append(os.Environ(), "PATCHFIELDGEN_TEST_MAIN=1")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -444,20 +445,20 @@ func TestMainExitsOnError(t *testing.T) {
 
 func TestWriteFileAtomic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out.txt")
-	require.NoError(t, writeFileAtomic(path, []byte("hello"), 0o644))
+	require.NoError(t, writeFileAtomic(path, []byte("hello")))
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(data))
 
-	require.NoError(t, writeFileAtomic(path, []byte("world"), 0o644))
+	require.NoError(t, writeFileAtomic(path, []byte("world")))
 	data, err = os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, "world", string(data))
 }
 
 func TestWriteFileAtomicMissingDir(t *testing.T) {
-	err := writeFileAtomic(filepath.Join(t.TempDir(), "nope", "out.txt"), []byte("x"), 0o644)
+	err := writeFileAtomic(filepath.Join(t.TempDir(), "nope", "out.txt"), []byte("x"))
 	require.Error(t, err)
 }
 

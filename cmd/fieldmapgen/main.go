@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -63,11 +64,11 @@ func run(args []string) error {
 	packageName := fs.String("package", "database", "generated Go package name")
 	fs.Var(&roots, "root", "root model type to generate field maps for; repeatable")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return fmt.Errorf("parse flags: %w", err)
 	}
 
 	if len(roots) == 0 {
-		return fmt.Errorf("at least one -root is required")
+		return errors.New("at least one -root is required")
 	}
 
 	models, err := parseModelDir(*modelDir)
@@ -118,7 +119,7 @@ func run(args []string) error {
 	if err := os.MkdirAll(filepath.Dir(*outPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-	if err := writeFileAtomic(*outPath, out, 0o644); err != nil {
+	if err := writeFileAtomic(*outPath, out); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 	return nil
@@ -126,28 +127,31 @@ func run(args []string) error {
 
 // writeFileAtomic writes data to path by first writing to a temp file in the
 // same directory and renaming on success, so a failed write never leaves a
-// partial file at path.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+// partial file at path. The output file mode is 0o644.
+func writeFileAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".fieldmapgen-*")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) //nolint:errcheck // best-effort cleanup; rename removes the file on success
 
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close() //nolint:errcheck // already failing
-		return err
+		return fmt.Errorf("write temp file: %w", err)
 	}
-	if err := tmp.Chmod(perm); err != nil {
+	if err := tmp.Chmod(0o644); err != nil {
 		tmp.Close() //nolint:errcheck // already failing
-		return err
+		return fmt.Errorf("chmod temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return fmt.Errorf("close temp file: %w", err)
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
 }
 
 type fieldMap struct {
