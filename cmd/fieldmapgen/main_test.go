@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -275,6 +276,159 @@ func TestQueryAlias(t *testing.T) {
 func TestStructTagWithoutTag(t *testing.T) {
 	tag := structTag(&ast.Field{})
 	assert.Equal(t, reflect.StructTag(""), tag)
+}
+
+func TestRunGeneratesOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "model.go"), `
+package database
+
+import "github.com/uptrace/bun"
+
+type User struct {
+	bun.BaseModel `+"`bun:\"table:users,alias:u\"`"+`
+	ID string `+"`bun:\"id,pk\"`"+`
+	Email string `+"`bun:\"email\"`"+`
+}
+`)
+	out := filepath.Join(t.TempDir(), "out", "fieldmap_generated.go")
+
+	err := run([]string{
+		"-model-dir", dir,
+		"-out", out,
+		"-package", "database",
+		"-root", "User",
+	})
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(out)
+	require.NoError(t, err)
+	got := string(data)
+	assert.Contains(t, got, "package database")
+	assert.Contains(t, got, "func IsUserRootField")
+	assert.Contains(t, got, `"email": "email"`)
+}
+
+func TestRunErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "missing root",
+			args: []string{"-model-dir", t.TempDir(), "-out", "/tmp/x.go"},
+			want: "at least one -root is required",
+		},
+		{
+			name: "model dir missing",
+			args: []string{"-model-dir", filepath.Join(t.TempDir(), "nope"), "-out", "/tmp/x.go", "-root", "User"},
+			want: "read model directory",
+		},
+		{
+			name: "unknown root",
+			args: []string{"-model-dir", t.TempDir(), "-out", "/tmp/x.go", "-root", "Ghost"},
+			want: "Ghost model not found",
+		},
+		{
+			name: "flag parse error",
+			args: []string{"-not-a-flag"},
+			want: "flag provided but not defined",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := run(tt.args)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestRunFormatSourceError(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "model.go"), `
+package database
+
+import "github.com/uptrace/bun"
+
+type User struct {
+	bun.BaseModel `+"`bun:\"table:users,alias:u\"`"+`
+	ID string `+"`bun:\"id,pk\"`"+`
+}
+`)
+	err := run([]string{
+		"-model-dir", dir,
+		"-out", filepath.Join(t.TempDir(), "out.go"),
+		"-package", "1invalid",
+		"-root", "User",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "format generated source")
+}
+
+func TestRunMkdirError(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "model.go"), `
+package database
+
+import "github.com/uptrace/bun"
+
+type User struct {
+	bun.BaseModel `+"`bun:\"table:users,alias:u\"`"+`
+	ID string `+"`bun:\"id,pk\"`"+`
+}
+`)
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte{}, 0o600))
+
+	err := run([]string{
+		"-model-dir", dir,
+		"-out", filepath.Join(blocker, "sub", "out.go"),
+		"-package", "database",
+		"-root", "User",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mkdir")
+}
+
+func TestMainExitsOnError(t *testing.T) {
+	if os.Getenv("FIELDMAPGEN_TEST_MAIN") == "1" {
+		os.Args = []string{"fieldmapgen"}
+		main()
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestMainExitsOnError")
+	cmd.Env = append(os.Environ(), "FIELDMAPGEN_TEST_MAIN=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 1, exitErr.ExitCode())
+	assert.Contains(t, stderr.String(), "fieldmapgen:")
+}
+
+func TestWriteFileAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "out.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, writeFileAtomic(path, []byte("hello"), 0o644))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(data))
+
+	require.NoError(t, writeFileAtomic(path, []byte("world"), 0o644))
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "world", string(data))
+}
+
+func TestWriteFileAtomicMissingDir(t *testing.T) {
+	err := writeFileAtomic(filepath.Join(t.TempDir(), "nope", "out.txt"), []byte("x"), 0o644)
+	require.Error(t, err)
 }
 
 func parseSource(t *testing.T, src string) *ast.File {

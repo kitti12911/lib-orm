@@ -48,21 +48,31 @@ func (l *stringList) Set(value string) error {
 }
 
 func main() {
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "fieldmapgen: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
 	var roots stringList
 
-	modelDir := flag.String("model-dir", "internal/database", "directory containing Bun model files")
-	outPath := flag.String("out", "gen/database/fieldmap_generated.go", "generated Go output path")
-	packageName := flag.String("package", "database", "generated Go package name")
-	flag.Var(&roots, "root", "root model type to generate field maps for; repeatable")
-	flag.Parse()
+	fs := flag.NewFlagSet("fieldmapgen", flag.ContinueOnError)
+	modelDir := fs.String("model-dir", "internal/database", "directory containing Bun model files")
+	outPath := fs.String("out", "gen/database/fieldmap_generated.go", "generated Go output path")
+	packageName := fs.String("package", "database", "generated Go package name")
+	fs.Var(&roots, "root", "root model type to generate field maps for; repeatable")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if len(roots) == 0 {
-		panic("at least one -root is required")
+		return fmt.Errorf("at least one -root is required")
 	}
 
 	models, err := parseModelDir(*modelDir)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	var buf bytes.Buffer
@@ -72,7 +82,7 @@ func main() {
 	for _, rootName := range roots {
 		root, ok := models[rootName]
 		if !ok {
-			panic(fmt.Sprintf("%s model not found", rootName))
+			return fmt.Errorf("%s model not found", rootName)
 		}
 
 		fieldMaps := map[string]fieldMap{}
@@ -103,14 +113,41 @@ func main() {
 
 	out, err := format.Source(buf.Bytes())
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("format generated source: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(*outPath), 0o755); err != nil {
-		panic(err)
+		return fmt.Errorf("mkdir: %w", err)
 	}
-	if err := os.WriteFile(*outPath, out, 0o644); err != nil { //nolint:gosec // Generated source should be readable.
-		panic(err)
+	if err := writeFileAtomic(*outPath, out, 0o644); err != nil {
+		return fmt.Errorf("write output: %w", err)
 	}
+	return nil
+}
+
+// writeFileAtomic writes data to path by first writing to a temp file in the
+// same directory and renaming on success, so a failed write never leaves a
+// partial file at path.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".fieldmapgen-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) //nolint:errcheck // best-effort cleanup; rename removes the file on success
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close() //nolint:errcheck // already failing
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close() //nolint:errcheck // already failing
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 type fieldMap struct {

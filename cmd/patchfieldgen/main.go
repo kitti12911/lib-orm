@@ -63,44 +63,54 @@ type copyRule struct {
 }
 
 func main() {
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "patchfieldgen: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) error {
 	var bucketFlags stringList
 	var copyFlags stringList
 
-	filePath := flag.String("file", "", "Go source file containing patch params")
-	rootName := flag.String("root", "", "root struct type name")
-	outPath := flag.String("out", "", "generated Go output path")
-	packageName := flag.String("package", "", "generated Go package name")
-	functionName := flag.String("function", "patchFields", "generated function name")
-	fieldMapImport := flag.String("fieldmap-import", "", "field map package import path")
-	paramType := flag.String("param-type", "PatchParams", "generated function input type")
-	dataType := flag.String("data-type", "patchData", "generated function return type")
-	rootSelector := flag.String("root-selector", "", "selector for the root patch value, for example params.User")
-	pathsSelector := flag.String("paths-selector", "", "selector for patch paths, for example params.Fields")
-	flag.Var(&bucketFlags, "bucket", "bucket mapping as path_prefix:data_map_field:validator_func; use root for top-level fields; repeatable")
-	flag.Var(&copyFlags, "copy", "optional copy rule as pointer_source:target[:guard,guard]; emits guarded pointer copy; repeatable")
-	flag.Parse()
+	fs := flag.NewFlagSet("patchfieldgen", flag.ContinueOnError)
+	filePath := fs.String("file", "", "Go source file containing patch params")
+	rootName := fs.String("root", "", "root struct type name")
+	outPath := fs.String("out", "", "generated Go output path")
+	packageName := fs.String("package", "", "generated Go package name")
+	functionName := fs.String("function", "patchFields", "generated function name")
+	fieldMapImport := fs.String("fieldmap-import", "", "field map package import path")
+	paramType := fs.String("param-type", "PatchParams", "generated function input type")
+	dataType := fs.String("data-type", "patchData", "generated function return type")
+	rootSelector := fs.String("root-selector", "", "selector for the root patch value, for example params.User")
+	pathsSelector := fs.String("paths-selector", "", "selector for patch paths, for example params.Fields")
+	fs.Var(&bucketFlags, "bucket", "bucket mapping as path_prefix:data_map_field:validator_func; use root for top-level fields; repeatable")
+	fs.Var(&copyFlags, "copy", "optional copy rule as pointer_source:target[:guard,guard]; emits guarded pointer copy; repeatable")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	if *filePath == "" || *rootName == "" || *outPath == "" || *packageName == "" ||
 		*fieldMapImport == "" || *rootSelector == "" || *pathsSelector == "" || len(bucketFlags) == 0 {
-		panic("file, root, out, package, fieldmap-import, root-selector, paths-selector, and bucket are required")
+		return fmt.Errorf("file, root, out, package, fieldmap-import, root-selector, paths-selector, and bucket are required")
 	}
 
 	models, err := parseModels(*filePath)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	buckets, err := parseBuckets(bucketFlags)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	copyRules, err := parseCopyRules(copyFlags)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
-	fields := collectFields(models, buckets, *rootName, "", *rootSelector, nil)
+	fields := collectFields(models, buckets, *rootName, "", *rootSelector, nil, map[string]bool{})
 	sort.Slice(fields, func(i, j int) bool {
 		return fields[i].path < fields[j].path
 	})
@@ -145,14 +155,41 @@ func main() {
 
 	out, err := format.Source(buf.Bytes())
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("format generated source: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(*outPath), 0o755); err != nil {
-		panic(err)
+		return fmt.Errorf("mkdir: %w", err)
 	}
-	if err := os.WriteFile(*outPath, out, 0o644); err != nil { //nolint:gosec // Generated source should be readable.
-		panic(err)
+	if err := writeFileAtomic(*outPath, out, 0o644); err != nil {
+		return fmt.Errorf("write output: %w", err)
 	}
+	return nil
+}
+
+// writeFileAtomic writes data to path by first writing to a temp file in the
+// same directory and renaming on success, so a failed write never leaves a
+// partial file at path.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".patchfieldgen-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) //nolint:errcheck // best-effort cleanup; rename removes the file on success
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close() //nolint:errcheck // already failing
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close() //nolint:errcheck // already failing
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func parseModels(path string) (map[string]model, error) {
@@ -219,11 +256,17 @@ func collectFields(
 	prefix string,
 	selector string,
 	guards []string,
+	seen map[string]bool,
 ) []field {
+	if seen[typeName] {
+		return nil
+	}
 	m, ok := models[typeName]
 	if !ok {
 		return nil
 	}
+	seen[typeName] = true
+	defer delete(seen, typeName)
 
 	fields := make([]field, 0, len(m.fields))
 	for _, modelField := range m.fields {
@@ -239,7 +282,7 @@ func collectFields(
 		}
 
 		if _, ok := models[modelField.typeName]; ok {
-			fields = append(fields, collectFields(models, buckets, modelField.typeName, path, nextSelector, nextGuards)...)
+			fields = append(fields, collectFields(models, buckets, modelField.typeName, path, nextSelector, nextGuards, seen)...)
 			continue
 		}
 

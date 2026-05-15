@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,7 +95,7 @@ type AddressBody struct {
 	})
 	require.NoError(t, err)
 
-	got := collectFields(models, buckets, "PatchBody", "", "input.Payload", nil)
+	got := collectFields(models, buckets, "PatchBody", "", "input.Payload", nil, map[string]bool{})
 
 	assert.Equal(t, []field{
 		{
@@ -134,8 +137,8 @@ func TestCollectFieldsSkipsMissingModelAndMissingBucket(t *testing.T) {
 		{prefix: "profile", mapField: "profileFields", validator: "fieldmap.IsProfileField"},
 	}
 
-	assert.Nil(t, collectFields(models, buckets, "MissingBody", "", "input.Payload", nil))
-	assert.Empty(t, collectFields(models, buckets, "PatchBody", "", "input.Payload", nil))
+	assert.Nil(t, collectFields(models, buckets, "MissingBody", "", "input.Payload", nil, map[string]bool{}))
+	assert.Empty(t, collectFields(models, buckets, "PatchBody", "", "input.Payload", nil, map[string]bool{}))
 }
 
 func TestParseModelsReturnsParseError(t *testing.T) {
@@ -246,6 +249,216 @@ func TestNilConditions(t *testing.T) {
 	got := nilConditions([]string{"input.Profile", "input.Profile.Address"})
 
 	assert.Equal(t, "input.Profile != nil && input.Profile.Address != nil", got)
+}
+
+func TestCollectFieldsCyclicTypeTerminates(t *testing.T) {
+	models := map[string]model{
+		"A": {
+			name: "A",
+			fields: []modelField{
+				{name: "B", tag: "b", typeName: "B"},
+			},
+		},
+		"B": {
+			name: "B",
+			fields: []modelField{
+				{name: "A", tag: "a", typeName: "A"},
+			},
+		},
+	}
+	done := make(chan struct{})
+	go func() {
+		collectFields(models, nil, "A", "", "input", nil, map[string]bool{})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("collectFields did not terminate on cyclic types")
+	}
+}
+
+func TestRunGeneratesOutput(t *testing.T) {
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "params.go")
+	writePatchFieldFile(t, src, `package user
+
+type PatchBody struct {
+	Email string `+"`field:\"email\"`"+`
+}
+
+type PatchParams struct {
+	Payload PatchBody
+	Fields  []string
+}
+`)
+	out := filepath.Join(t.TempDir(), "sub", "patch_generated.go")
+
+	err := run([]string{
+		"-file", src,
+		"-root", "PatchBody",
+		"-out", out,
+		"-package", "user",
+		"-fieldmap-import", "example.com/fieldmap",
+		"-root-selector", "params.Payload",
+		"-paths-selector", "params.Fields",
+		"-bucket", "root:rootFields:fieldmap.IsRootField",
+	})
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(out)
+	require.NoError(t, err)
+	got := string(data)
+	assert.Contains(t, got, "package user")
+	assert.Contains(t, got, `case "email":`)
+}
+
+func TestRunErrors(t *testing.T) {
+	srcDir := t.TempDir()
+	validSrc := filepath.Join(srcDir, "p.go")
+	writePatchFieldFile(t, validSrc, `package u
+type PatchBody struct { Email string `+"`field:\"email\"`"+` }
+`)
+	validArgs := func(overrides ...string) []string {
+		args := []string{
+			"-file", validSrc,
+			"-root", "PatchBody",
+			"-out", filepath.Join(t.TempDir(), "out.go"),
+			"-package", "u",
+			"-fieldmap-import", "example.com/fieldmap",
+			"-root-selector", "params.Payload",
+			"-paths-selector", "params.Fields",
+			"-bucket", "root:rootFields:fieldmap.IsRootField",
+		}
+		return append(args, overrides...)
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "missing required flag",
+			args: []string{"-file", validSrc},
+			want: "are required",
+		},
+		{
+			name: "parse model error",
+			args: validArgs("-file", filepath.Join(t.TempDir(), "missing.go")),
+			want: "parse model file",
+		},
+		{
+			name: "bad bucket spec",
+			args: []string{
+				"-file", validSrc,
+				"-root", "PatchBody",
+				"-out", filepath.Join(t.TempDir(), "out.go"),
+				"-package", "u",
+				"-fieldmap-import", "example.com/fieldmap",
+				"-root-selector", "params.Payload",
+				"-paths-selector", "params.Fields",
+				"-bucket", "malformed",
+			},
+			want: "invalid bucket",
+		},
+		{
+			name: "bad copy spec",
+			args: append(validArgs(), "-copy", "only-one"),
+			want: "invalid copy",
+		},
+		{
+			name: "flag parse error",
+			args: []string{"-not-a-flag"},
+			want: "flag provided but not defined",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := run(tt.args)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestRunFormatSourceError(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "p.go")
+	writePatchFieldFile(t, src, `package u
+type PatchBody struct { Email string `+"`field:\"email\"`"+` }
+`)
+	err := run([]string{
+		"-file", src,
+		"-root", "PatchBody",
+		"-out", filepath.Join(t.TempDir(), "out.go"),
+		"-package", "1invalid",
+		"-fieldmap-import", "example.com/fieldmap",
+		"-root-selector", "params.Payload",
+		"-paths-selector", "params.Fields",
+		"-bucket", "root:rootFields:fieldmap.IsRootField",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "format generated source")
+}
+
+func TestRunMkdirError(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "p.go")
+	writePatchFieldFile(t, src, `package u
+type PatchBody struct { Email string `+"`field:\"email\"`"+` }
+`)
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte{}, 0o600))
+
+	err := run([]string{
+		"-file", src,
+		"-root", "PatchBody",
+		"-out", filepath.Join(blocker, "sub", "out.go"),
+		"-package", "u",
+		"-fieldmap-import", "example.com/fieldmap",
+		"-root-selector", "params.Payload",
+		"-paths-selector", "params.Fields",
+		"-bucket", "root:rootFields:fieldmap.IsRootField",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mkdir")
+}
+
+func TestMainExitsOnError(t *testing.T) {
+	if os.Getenv("PATCHFIELDGEN_TEST_MAIN") == "1" {
+		os.Args = []string{"patchfieldgen"}
+		main()
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestMainExitsOnError")
+	cmd.Env = append(os.Environ(), "PATCHFIELDGEN_TEST_MAIN=1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 1, exitErr.ExitCode())
+	assert.Contains(t, stderr.String(), "patchfieldgen:")
+}
+
+func TestWriteFileAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.txt")
+	require.NoError(t, writeFileAtomic(path, []byte("hello"), 0o644))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(data))
+
+	require.NoError(t, writeFileAtomic(path, []byte("world"), 0o644))
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, "world", string(data))
+}
+
+func TestWriteFileAtomicMissingDir(t *testing.T) {
+	err := writeFileAtomic(filepath.Join(t.TempDir(), "nope", "out.txt"), []byte("x"), 0o644)
+	require.Error(t, err)
 }
 
 func writePatchFieldFile(t *testing.T, path, content string) {
