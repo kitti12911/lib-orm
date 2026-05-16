@@ -126,7 +126,7 @@ formatters:
     settings:
         goimports:
             local-prefixes:
-                - github.com/kitti12911/lib-orm/v2
+                - github.com/kitti12911/lib-orm/v3
 
 issues:
     max-issues-per-linter: 0

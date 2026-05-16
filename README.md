@@ -20,7 +20,7 @@ lib-orm/
 ## install
 
 ```bash
-go get github.com/kitti12911/lib-orm/v2
+go get github.com/kitti12911/lib-orm/v3
 ```
 
 ## ci commands
@@ -67,7 +67,7 @@ using `image-toolchain` v1.1.0 because that image does not include one.
 PostgreSQL connection setup, Bun model registration, OpenTelemetry query hooks, migrations, and fixture loading.
 
 ```go
-import orm "github.com/kitti12911/lib-orm/v2"
+import orm "github.com/kitti12911/lib-orm/v3"
 
 db, err := orm.New(
     ctx,
@@ -202,7 +202,7 @@ if err := orm.ApplyPatchFields(query, fields, columns); err != nil {
 structs:
 
 ```bash
-go run github.com/kitti12911/lib-orm/v2/cmd/fieldmapgen@v2.2.0 \
+go run github.com/kitti12911/lib-orm/v3/cmd/fieldmapgen@v2.2.0 \
     -model-dir internal/database \
     -root User \
     -out gen/database/fieldmap_generated.go \
@@ -226,7 +226,7 @@ maps request paths into table-specific field buckets and can copy nested request
 values for create-if-missing flows:
 
 ```bash
-go run github.com/kitti12911/lib-orm/v2/cmd/patchfieldgen@v2.2.0 \
+go run github.com/kitti12911/lib-orm/v3/cmd/patchfieldgen@v2.2.0 \
     -file internal/feature/user/user.go \
     -root CreateParams \
     -out internal/feature/user/patch_generated.go \
