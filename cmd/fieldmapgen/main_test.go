@@ -235,13 +235,6 @@ func TestWriteMap(t *testing.T) {
 	assert.Equal(t, want, buf.String())
 }
 
-func TestWriteValidator(t *testing.T) {
-	var buf bytes.Buffer
-	writeValidator(&buf, "UserRoot", "UserRootFields")
-	want := "func IsUserRootField(field string) bool {\n\t_, ok := UserRootFields[field]\n\treturn ok\n}\n\n"
-	assert.Equal(t, want, buf.String())
-}
-
 func TestColumnsFor(t *testing.T) {
 	maps := map[string]fieldMap{
 		rootNestedName: {
@@ -305,8 +298,12 @@ type User struct {
 	require.NoError(t, err)
 	got := string(data)
 	assert.Contains(t, got, "package database")
-	assert.Contains(t, got, "func IsUserRootField")
+	assert.Contains(t, got, "var UserRootFields = map[string]string{")
+	assert.Contains(t, got, "var UserColumns = map[string]string{")
 	assert.Contains(t, got, `"email": "email"`)
+	// Validator functions and the RootNestedName const are no longer emitted.
+	assert.NotContains(t, got, "func IsUserRootField")
+	assert.NotContains(t, got, "RootNestedName")
 }
 
 func TestRunErrors(t *testing.T) {

@@ -15,57 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStringList(t *testing.T) {
-	var list stringList
-
-	require.NoError(t, list.Set("one"))
-	require.NoError(t, list.Set("two"))
-	require.Error(t, list.Set(""))
-	assert.Equal(t, "one,two", list.String())
-}
-
-func TestParseBuckets(t *testing.T) {
-	got, err := parseBuckets([]string{
-		"root:rootFields:fieldmap.IsRootField",
-		"profile:profileFields:fieldmap.IsProfileField",
-		"profile.address:addressFields:fieldmap.IsAddressField",
-	})
-
-	require.NoError(t, err)
-	assert.Equal(t, []bucket{
-		{prefix: "profile.address", mapField: "addressFields", validator: "fieldmap.IsAddressField"},
-		{prefix: "profile", mapField: "profileFields", validator: "fieldmap.IsProfileField"},
-		{prefix: "", mapField: "rootFields", validator: "fieldmap.IsRootField"},
-	}, got)
-}
-
-func TestParseBucketsReturnsInvalidBucket(t *testing.T) {
-	_, err := parseBuckets([]string{"bad"})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid bucket")
-}
-
-func TestParseCopyRules(t *testing.T) {
-	got, err := parseCopyRules([]string{
-		"input.Payload.Profile:data.profile",
-		"input.Payload.Profile.Address:data.address:input.Payload.Profile",
-	})
-
-	require.NoError(t, err)
-	assert.Equal(t, []copyRule{
-		{source: "input.Payload.Profile", target: "data.profile"},
-		{source: "input.Payload.Profile.Address", target: "data.address", guards: []string{"input.Payload.Profile"}},
-	}, got)
-}
-
-func TestParseCopyRulesReturnsInvalidRule(t *testing.T) {
-	_, err := parseCopyRules([]string{"bad"})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid copy")
-}
-
 func TestCollectFieldsUsesConfiguredSelectorsAndBuckets(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "params.go")
 	writePatchFieldFile(t, file, `
@@ -88,38 +37,34 @@ type AddressBody struct {
 
 	models, err := parseModels(file)
 	require.NoError(t, err)
-	buckets, err := parseBuckets([]string{
-		"root:rootFields:fieldmap.IsRootField",
-		"profile:profileFields:fieldmap.IsProfileField",
-		"profile.address:addressFields:fieldmap.IsAddressField",
-	})
-	require.NoError(t, err)
+	buckets := []bucket{
+		{prefix: "profile.address", mapField: "addressFields"},
+		{prefix: "profile", mapField: "profileFields"},
+		{prefix: "", mapField: "rootFields"},
+	}
 
 	got := collectFields(models, buckets, "PatchBody", "", "input.Payload", nil, map[string]bool{})
 
 	assert.Equal(t, []field{
 		{
-			path:      "email",
-			key:       "email",
-			selector:  "input.Payload.Email",
-			mapField:  "rootFields",
-			validator: "fieldmap.IsRootField",
+			path:     "email",
+			key:      "email",
+			selector: "input.Payload.Email",
+			mapField: "rootFields",
 		},
 		{
-			path:      "profile.first_name",
-			key:       "first_name",
-			selector:  "input.Payload.Profile.FirstName",
-			guards:    []string{"input.Payload.Profile"},
-			mapField:  "profileFields",
-			validator: "fieldmap.IsProfileField",
+			path:     "profile.first_name",
+			key:      "first_name",
+			selector: "input.Payload.Profile.FirstName",
+			guards:   []string{"input.Payload.Profile"},
+			mapField: "profileFields",
 		},
 		{
-			path:      "profile.address.city",
-			key:       "city",
-			selector:  "input.Payload.Profile.Address.City",
-			guards:    []string{"input.Payload.Profile", "input.Payload.Profile.Address"},
-			mapField:  "addressFields",
-			validator: "fieldmap.IsAddressField",
+			path:     "profile.address.city",
+			key:      "city",
+			selector: "input.Payload.Profile.Address.City",
+			guards:   []string{"input.Payload.Profile", "input.Payload.Profile.Address"},
+			mapField: "addressFields",
 		},
 	}, got)
 }
@@ -134,7 +79,7 @@ func TestCollectFieldsSkipsMissingModelAndMissingBucket(t *testing.T) {
 		},
 	}
 	buckets := []bucket{
-		{prefix: "profile", mapField: "profileFields", validator: "fieldmap.IsProfileField"},
+		{prefix: "profile", mapField: "profileFields"},
 	}
 
 	assert.Nil(t, collectFields(models, buckets, "MissingBody", "", "input.Payload", nil, map[string]bool{}))
@@ -221,15 +166,13 @@ type PatchBody struct {
 }
 
 func TestBucketFor(t *testing.T) {
-	buckets, err := parseBuckets([]string{
-		"profile:profileFields:fieldmap.IsProfileField",
-	})
-	require.NoError(t, err)
+	buckets := []bucket{
+		{prefix: "profile", mapField: "profileFields"},
+	}
 
 	got, ok := bucketFor(buckets, "profile.first_name")
-
 	require.True(t, ok)
-	assert.Equal(t, bucket{prefix: "profile", mapField: "profileFields", validator: "fieldmap.IsProfileField"}, got)
+	assert.Equal(t, bucket{prefix: "profile", mapField: "profileFields"}, got)
 
 	_, ok = bucketFor(buckets, "email")
 	assert.False(t, ok)
@@ -278,60 +221,169 @@ func TestCollectFieldsCyclicTypeTerminates(t *testing.T) {
 	}
 }
 
-func TestRunGeneratesOutput(t *testing.T) {
-	srcDir := t.TempDir()
-	src := filepath.Join(srcDir, "params.go")
+func TestGenerateEmitsCombinedNilGuard(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "params.go")
 	writePatchFieldFile(t, src, `package user
 
 type PatchBody struct {
-	Email string `+"`field:\"email\"`"+`
+	Profile *ProfileBody `+"`field:\"profile\"`"+`
 }
 
-type PatchParams struct {
-	Payload PatchBody
-	Fields  []string
+type ProfileBody struct {
+	Address *AddressBody `+"`field:\"address\"`"+`
+}
+
+type AddressBody struct {
+	City *string `+"`field:\"city\"`"+`
 }
 `)
-	out := filepath.Join(t.TempDir(), "sub", "patch_generated.go")
+	out := filepath.Join(dir, "patch_generated.go")
+	configPath := filepath.Join(dir, "patchfields.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+targets:
+  - file: `+src+`
+    root: PatchBody
+    out: `+out+`
+    package: user
+    root_selector: params.Payload
+    paths_selector: params.Fields
+    buckets:
+      - path: profile.address
+        map_field: addressFields
+`), 0o600))
 
-	err := run([]string{
-		"-file", src,
-		"-root", "PatchBody",
-		"-out", out,
-		"-package", "user",
-		"-fieldmap-import", "example.com/fieldmap",
-		"-root-selector", "params.Payload",
-		"-paths-selector", "params.Fields",
-		"-bucket", "root:rootFields:fieldmap.IsRootField",
-	})
-	require.NoError(t, err)
+	require.NoError(t, run([]string{"-config", configPath}))
 
 	data, err := os.ReadFile(out)
 	require.NoError(t, err)
 	got := string(data)
-	assert.Contains(t, got, "package user")
-	assert.Contains(t, got, `case "email":`)
+	// Combined guard short-circuits via `||` so a single ancestor nil check
+	// avoids the deeper deref panic.
+	assert.Contains(t, got, "params.Payload.Profile == nil || params.Payload.Profile.Address == nil")
+	// Old chained-if pattern must not appear.
+	assert.NotContains(t, got, "if params.Payload.Profile == nil {\n\t\t\t\tdata.addressFields")
 }
 
-func TestRunErrors(t *testing.T) {
-	srcDir := t.TempDir()
-	validSrc := filepath.Join(srcDir, "p.go")
-	writePatchFieldFile(t, validSrc, `package u
-type PatchBody struct { Email string `+"`field:\"email\"`"+` }
+func TestRunFromYAMLConfig(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "params.go")
+	writePatchFieldFile(t, src, `package user
+
+type PatchBody struct {
+	Email string `+"`field:\"email\"`"+`
+	Profile *ProfileBody `+"`field:\"profile\"`"+`
+}
+
+type ProfileBody struct {
+	FirstName *string `+"`field:\"first_name\"`"+`
+}
 `)
-	validArgs := func(overrides ...string) []string {
-		args := make([]string, 0, 16+len(overrides))
-		args = append(args,
-			"-file", validSrc,
-			"-root", "PatchBody",
-			"-out", filepath.Join(t.TempDir(), "out.go"),
-			"-package", "u",
-			"-fieldmap-import", "example.com/fieldmap",
-			"-root-selector", "params.Payload",
-			"-paths-selector", "params.Fields",
-			"-bucket", "root:rootFields:fieldmap.IsRootField",
-		)
-		return append(args, overrides...)
+	outA := filepath.Join(dir, "patch_a.go")
+	outB := filepath.Join(dir, "patch_b.go")
+	configPath := filepath.Join(dir, "patchfields.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+function: applyPatch
+targets:
+  - file: `+src+`
+    root: PatchBody
+    out: `+outA+`
+    package: user
+    root_selector: params.Payload
+    paths_selector: params.Fields
+    buckets:
+      - path: ""
+        map_field: rootFields
+      - path: profile
+        map_field: profileFields
+  - file: `+src+`
+    root: PatchBody
+    out: `+outB+`
+    package: user
+    function: applyPatchB
+    root_selector: params.Payload
+    paths_selector: params.Fields
+    buckets:
+      - map_field: rootFields              # omitting "path" is equivalent to ""
+`), 0o600))
+
+	require.NoError(t, run([]string{"-config", configPath}))
+
+	dataA, err := os.ReadFile(outA)
+	require.NoError(t, err)
+	gotA := string(dataA)
+	assert.Contains(t, gotA, "func applyPatch(params PatchParams) patchData")
+	assert.Contains(t, gotA, `case "email":`)
+	assert.Contains(t, gotA, `case "profile.first_name":`)
+	assert.Contains(t, gotA, "data.profileFields[\"first_name\"] = params.Payload.Profile.FirstName")
+	// No fieldmap import is emitted; the bucket map write is direct.
+	assert.NotContains(t, gotA, "import fieldmap")
+
+	dataB, err := os.ReadFile(outB)
+	require.NoError(t, err)
+	gotB := string(dataB)
+	// Target B overrides the function name and inherits other defaults.
+	assert.Contains(t, gotB, "func applyPatchB(params PatchParams) patchData")
+	assert.Contains(t, gotB, `case "email":`)
+}
+
+func TestRunFromYAMLConfigWithCopyRules(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "params.go")
+	writePatchFieldFile(t, src, `package user
+
+type PatchBody struct {
+	Profile *ProfileBody `+"`field:\"profile\"`"+`
+}
+
+type ProfileBody struct {
+	Address *AddressBody `+"`field:\"address\"`"+`
+}
+
+type AddressBody struct {
+	City *string `+"`field:\"city\"`"+`
+}
+`)
+	out := filepath.Join(dir, "patch.go")
+	configPath := filepath.Join(dir, "patchfields.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+targets:
+  - file: `+src+`
+    root: PatchBody
+    out: `+out+`
+    package: user
+    root_selector: params.Payload
+    paths_selector: params.Fields
+    buckets:
+      - path: profile.address
+        map_field: addressFields
+    copies:
+      - source: params.Payload.Profile
+        target: data.profile
+      - source: params.Payload.Profile.Address
+        target: data.address
+        guards:
+          - params.Payload.Profile
+`), 0o600))
+
+	require.NoError(t, run([]string{"-config", configPath}))
+
+	data, err := os.ReadFile(out)
+	require.NoError(t, err)
+	got := string(data)
+	assert.Contains(t, got, "if params.Payload.Profile != nil {")
+	assert.Contains(t, got, "data.profile = *params.Payload.Profile")
+	assert.Contains(t, got, "if params.Payload.Profile != nil && params.Payload.Profile.Address != nil {")
+	assert.Contains(t, got, "data.address = *params.Payload.Profile.Address")
+}
+
+func TestRunFromYAMLConfigErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML := func(t *testing.T, body string) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "patchfields.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		return path
 	}
 
 	tests := []struct {
@@ -340,38 +392,61 @@ type PatchBody struct { Email string `+"`field:\"email\"`"+` }
 		want string
 	}{
 		{
-			name: "missing required flag",
-			args: []string{"-file", validSrc},
-			want: "are required",
+			name: "missing file",
+			args: []string{"-config", filepath.Join(dir, "nope.yaml")},
+			want: "read config",
 		},
 		{
-			name: "parse model error",
-			args: validArgs("-file", filepath.Join(t.TempDir(), "missing.go")),
-			want: "parse model file",
+			name: "malformed yaml",
+			args: []string{"-config", writeYAML(t, ":\n  - bad\n")},
+			want: "parse config",
 		},
 		{
-			name: "bad bucket spec",
-			args: []string{
-				"-file", validSrc,
-				"-root", "PatchBody",
-				"-out", filepath.Join(t.TempDir(), "out.go"),
-				"-package", "u",
-				"-fieldmap-import", "example.com/fieldmap",
-				"-root-selector", "params.Payload",
-				"-paths-selector", "params.Fields",
-				"-bucket", "malformed",
-			},
-			want: "invalid bucket",
+			name: "empty targets",
+			args: []string{"-config", writeYAML(t, "targets: []\n")},
+			want: "targets must not be empty",
 		},
 		{
-			name: "bad copy spec",
-			args: append(validArgs(), "-copy", "only-one"),
-			want: "invalid copy",
+			name: "target missing required fields",
+			args: []string{"-config", writeYAML(t, `
+targets:
+  - file: x.go
+    root: PatchBody
+`)},
+			want: "file, root, out, package, root_selector",
 		},
 		{
-			name: "flag parse error",
-			args: []string{"-not-a-flag"},
-			want: "flag provided but not defined",
+			name: "bucket missing fields",
+			args: []string{"-config", writeYAML(t, `
+targets:
+  - file: x.go
+    root: PatchBody
+    out: y.go
+    package: u
+    root_selector: params.Payload
+    paths_selector: params.Fields
+    buckets:
+      - path: ""
+`)},
+			want: "map_field is required",
+		},
+		{
+			name: "copy rule missing target",
+			args: []string{"-config", writeYAML(t, `
+targets:
+  - file: x.go
+    root: PatchBody
+    out: y.go
+    package: u
+    root_selector: params.Payload
+    paths_selector: params.Fields
+    buckets:
+      - path: ""
+        map_field: rootFields
+    copies:
+      - source: params.Payload.Profile
+`)},
+			want: "source and target are required",
 		},
 	}
 
@@ -384,21 +459,64 @@ type PatchBody struct { Email string `+"`field:\"email\"`"+` }
 	}
 }
 
+func TestRunRequiresConfigFlag(t *testing.T) {
+	err := run(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "-config is required")
+}
+
+func TestRunFlagParseError(t *testing.T) {
+	err := run([]string{"-not-a-flag"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "flag provided but not defined")
+}
+
+func writeYAMLConfig(t *testing.T, srcPath, outPath string) string {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "patchfields.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+targets:
+  - file: `+srcPath+`
+    root: PatchBody
+    out: `+outPath+`
+    package: u
+    root_selector: params.Payload
+    paths_selector: params.Fields
+    buckets:
+      - map_field: rootFields
+`), 0o600))
+	return configPath
+}
+
+func TestRunParseModelError(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "missing.go")
+	configPath := writeYAMLConfig(t, src, filepath.Join(t.TempDir(), "out.go"))
+
+	err := run([]string{"-config", configPath})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse model file")
+}
+
 func TestRunFormatSourceError(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "p.go")
 	writePatchFieldFile(t, src, `package u
 type PatchBody struct { Email string `+"`field:\"email\"`"+` }
 `)
-	err := run([]string{
-		"-file", src,
-		"-root", "PatchBody",
-		"-out", filepath.Join(t.TempDir(), "out.go"),
-		"-package", "1invalid",
-		"-fieldmap-import", "example.com/fieldmap",
-		"-root-selector", "params.Payload",
-		"-paths-selector", "params.Fields",
-		"-bucket", "root:rootFields:fieldmap.IsRootField",
-	})
+	out := filepath.Join(t.TempDir(), "out.go")
+	configPath := filepath.Join(t.TempDir(), "patchfields.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+targets:
+  - file: `+src+`
+    root: PatchBody
+    out: `+out+`
+    package: "1invalid"
+    root_selector: params.Payload
+    paths_selector: params.Fields
+    buckets:
+      - map_field: rootFields
+`), 0o600))
+
+	err := run([]string{"-config", configPath})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "format generated source")
 }
@@ -411,16 +529,10 @@ type PatchBody struct { Email string `+"`field:\"email\"`"+` }
 	blocker := filepath.Join(t.TempDir(), "blocker")
 	require.NoError(t, os.WriteFile(blocker, []byte{}, 0o600))
 
-	err := run([]string{
-		"-file", src,
-		"-root", "PatchBody",
-		"-out", filepath.Join(blocker, "sub", "out.go"),
-		"-package", "u",
-		"-fieldmap-import", "example.com/fieldmap",
-		"-root-selector", "params.Payload",
-		"-paths-selector", "params.Fields",
-		"-bucket", "root:rootFields:fieldmap.IsRootField",
-	})
+	out := filepath.Join(blocker, "sub", "out.go")
+	configPath := writeYAMLConfig(t, src, out)
+
+	err := run([]string{"-config", configPath})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mkdir")
 }
