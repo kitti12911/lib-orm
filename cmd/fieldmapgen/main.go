@@ -1,3 +1,20 @@
+// Command fieldmapgen scans a directory of Bun ORM model files and emits, for
+// each requested root model, the field-to-column maps consumed at runtime by
+// lib-orm's query and patch helpers.
+//
+// For a root type `User`, the generated file declares:
+//
+//   - <Root>RootFields — map[string]string of top-level field → column.
+//   - <RelatedModel>Fields — one such map for every has-one/has-many child
+//     relation reachable from the root.
+//   - <Root>Columns — the aggregated map of dotted path → qualified column,
+//     used by orm.ApplyFilters and orm.ApplyOrderBy.
+//
+// Earlier releases also emitted per-model `IsXxxField(field string) bool`
+// helpers and a `<Root>RootNestedName` const. Both were used only by an
+// internal call inside patchfieldgen-generated dispatchers, which no longer
+// performs that lookup. Bumping the generator drops those declarations from
+// the regenerated output.
 package main
 
 import (
@@ -89,9 +106,10 @@ func run(args []string) error {
 		fieldMaps := map[string]fieldMap{}
 		visit(models, root, rootNestedName, fieldMaps, map[string]bool{})
 
-		fmt.Fprintf(&buf, "const %sRootNestedName = %q\n\n", root.name, rootNestedName)
+		// Per-model field maps. The root model becomes `<Root>RootFields`;
+		// child relations contribute `<RelatedModel>Fields`. Both feed
+		// orm.WritableColumns and friends.
 		writeMap(&buf, root.name+"RootFields", fieldMaps[rootNestedName].fields)
-		writeValidator(&buf, root.name+"Root", root.name+"RootFields")
 
 		nestedNames := make([]string, 0, len(fieldMaps))
 		for nestedName := range fieldMaps {
@@ -105,11 +123,11 @@ func run(args []string) error {
 		for _, nestedName := range nestedNames {
 			nestedFieldMap := fieldMaps[nestedName]
 			writeMap(&buf, nestedFieldMap.modelName+"Fields", nestedFieldMap.fields)
-			writeValidator(&buf, nestedFieldMap.modelName, nestedFieldMap.modelName+"Fields")
 		}
 
+		// Aggregate map of dotted-path → qualified column, consumed by
+		// orm.ApplyFilters and orm.ApplyOrderBy.
 		writeMap(&buf, root.name+"Columns", columnsFor(fieldMaps))
-		writeValidator(&buf, root.name, root.name+"Columns")
 	}
 
 	out, err := format.Source(buf.Bytes())
@@ -373,13 +391,6 @@ func writeMap(buf *bytes.Buffer, name string, fields map[string]string) {
 	for _, key := range keys {
 		fmt.Fprintf(buf, "\t%q: %q,\n", key, fields[key])
 	}
-	buf.WriteString("}\n\n")
-}
-
-func writeValidator(buf *bytes.Buffer, name, mapName string) {
-	fmt.Fprintf(buf, "func Is%sField(field string) bool {\n", name)
-	fmt.Fprintf(buf, "\t_, ok := %s[field]\n", mapName)
-	buf.WriteString("\treturn ok\n")
 	buf.WriteString("}\n\n")
 }
 
