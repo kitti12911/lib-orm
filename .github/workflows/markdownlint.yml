@@ -8,6 +8,7 @@ on:
             - ".github/workflows/markdownlint.yml"
             - ".markdownlint-cli2.*"
             - ".markdownlint.*"
+            - "scripts/ci/markdownlint.sh"
             - "**/*.md"
             - "**/*.markdown"
     pull_request:
@@ -15,6 +16,7 @@ on:
             - ".github/workflows/markdownlint.yml"
             - ".markdownlint-cli2.*"
             - ".markdownlint.*"
+            - "scripts/ci/markdownlint.sh"
             - "**/*.md"
             - "**/*.markdown"
 
