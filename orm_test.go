@@ -12,8 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/mssqldialect"
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/migrate"
+	"github.com/uptrace/bun/schema"
 )
 
 type testModel struct {
@@ -56,12 +58,54 @@ func TestNewPingError(t *testing.T) {
 	assert.ErrorContains(t, err, "orm: ping")
 }
 
+func TestNewMSSQLPingError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	db, err := New(ctx, Config{
+		Driver:   DriverMSSQL,
+		Host:     "localhost",
+		Port:     "1433",
+		User:     "sa",
+		Password: "pass",
+		Database: "app",
+		Insecure: true,
+	}, WithApplicationName("svc"))
+	require.Error(t, err)
+	assert.Nil(t, db)
+	assert.ErrorContains(t, err, "orm: ping")
+}
+
+func TestNewUnsupportedDriver(t *testing.T) {
+	db, err := New(context.Background(), Config{Driver: "oracle"})
+	require.Error(t, err)
+	assert.Nil(t, db)
+	assert.ErrorContains(t, err, "unsupported driver")
+}
+
+func TestMSSQLDSN(t *testing.T) {
+	dsn := mssqlDSN(Config{
+		Host:     "db.example",
+		Port:     "1433",
+		User:     "sa",
+		Password: "p@ss word",
+		Database: "app",
+		Insecure: true,
+	}, "svc")
+
+	assert.Contains(t, dsn, "sqlserver://")
+	assert.Contains(t, dsn, "db.example:1433")
+	assert.Contains(t, dsn, "database=app")
+	assert.Contains(t, dsn, "app+name=svc")
+	assert.Contains(t, dsn, "encrypt=disable")
+}
+
 func TestNewDB(t *testing.T) {
 	sqlDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
 	mock.ExpectPing()
 
-	db, err := newDB(context.Background(), sqlDB, Config{
+	db, err := newDB(context.Background(), sqlDB, pgdialect.New(), Config{
 		Database: "app",
 		Pool: PoolConfig{
 			MaxConns:        2,
@@ -86,7 +130,7 @@ func TestNewWrappedDB(t *testing.T) {
 	require.NoError(t, err)
 	mock.ExpectPing()
 
-	db, err := newWrappedDB(context.Background(), sqlDB, Config{Database: "app"}, options{})
+	db, err := newWrappedDB(context.Background(), sqlDB, pgdialect.New(), Config{Database: "app"}, options{})
 	require.NoError(t, err)
 	require.NotNil(t, db)
 	defer db.Close()
@@ -200,6 +244,27 @@ func TestLoadFixtures(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestLoadFixturesMSSQL(t *testing.T) {
+	db, mock := newMockBunDBWithDialect(t, mssqldialect.New())
+	defer db.Close()
+
+	mock.ExpectExec(`INSERT INTO "test_models" \("id", "name"\) VALUES \(1, N'alice'\)`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := LoadFixtures(context.Background(), db, fstest.MapFS{
+		"fixtures.yml": {
+			Data: []byte(`
+- model: TestModel
+  rows:
+    - id: 1
+      name: alice
+`),
+		},
+	}, "fixtures.yml")
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestLoadFixturesError(t *testing.T) {
 	db, _ := newMockBunDB(t)
 	defer db.Close()
@@ -227,10 +292,15 @@ func TestApplyPoolConfig(t *testing.T) {
 
 func newMockBunDB(t *testing.T) (*bun.DB, sqlmock.Sqlmock) {
 	t.Helper()
+	return newMockBunDBWithDialect(t, pgdialect.New())
+}
+
+func newMockBunDBWithDialect(t *testing.T, d schema.Dialect) (*bun.DB, sqlmock.Sqlmock) {
+	t.Helper()
 
 	sqlDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	require.NoError(t, err)
-	db := bun.NewDB(sqlDB, pgdialect.New())
+	db := bun.NewDB(sqlDB, d)
 	db.RegisterModel((*testModel)(nil))
 	return db, mock
 }

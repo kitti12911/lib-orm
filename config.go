@@ -2,7 +2,13 @@ package orm
 
 import "time"
 
+const (
+	DriverPostgres = "postgres"
+	DriverMSSQL    = "mssql"
+)
+
 type Config struct {
+	Driver        string     `mapstructure:"driver"         env:"DB_DRIVER"         validate:"omitempty,oneof=postgres mssql"`
 	Host          string     `mapstructure:"host"           env:"DB_HOST"           validate:"required,hostname|ip"`
 	Port          string     `mapstructure:"port"           env:"DB_PORT"           validate:"required,numeric,gte=1,lte=65535"`
 	User          string     `mapstructure:"user"           env:"DB_USER"           validate:"required"`

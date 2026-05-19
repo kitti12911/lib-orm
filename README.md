@@ -64,7 +64,7 @@ using `image-toolchain` v1.1.0 because that image does not include one.
 
 ### orm
 
-PostgreSQL connection setup, Bun model registration, OpenTelemetry query hooks, migrations, and fixture loading.
+PostgreSQL or SQL Server connection setup, Bun model registration, OpenTelemetry query hooks, migrations, and fixture loading.
 
 ```go
 import orm "github.com/kitti12911/lib-orm/v3"
@@ -77,6 +77,13 @@ db, err := orm.New(
     orm.WithTracing(cfg.Tracing.Enabled),
 )
 ```
+
+`Config.Driver` selects the dialect. Leave it empty or set
+`orm.DriverPostgres` for PostgreSQL (default, backward compatible) and set
+`orm.DriverMSSQL` for SQL Server. `Insecure` disables TLS for `pgdriver` and
+maps to `encrypt=disable` for the SQL Server driver. Fixture loading emits
+`ON CONFLICT DO NOTHING` only for PostgreSQL; SQL Server fixtures fall back to
+plain inserts.
 
 `orm.New` returns a wrapped database value. Use `db.Bun()` only when a caller
 really needs the raw `*bun.DB`; otherwise prefer `db.IDB(ctx)` so repository
