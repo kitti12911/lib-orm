@@ -25,36 +25,20 @@ go get github.com/kitti12911/lib-orm/v3
 
 ## ci commands
 
-reusable CI entrypoints live in `scripts/ci/` so GitHub Actions and GitLab CI
-can call the same commands with provider-specific orchestration around them.
+reusable CI entrypoints live in `scripts/ci/` so GitHub Actions can call the
+same commands with workflow-specific orchestration around them.
 
-| command                                    | purpose                           |
-| ------------------------------------------ | --------------------------------- |
-| `./scripts/ci/go-lint.sh`                  | run `go vet` and `golangci-lint`  |
-| `./scripts/ci/go-test.sh`                  | run tests with coverage           |
-| `./scripts/ci/markdownlint.sh`             | run Markdown linting              |
-| `./scripts/ci/security-scan.sh`            | run `govulncheck` and Semgrep     |
-| `./scripts/ci/supply-chain-scan.sh`        | run Trivy and Gitleaks            |
-| `./scripts/ci/semantic-release-plan.sh`    | preview the next semantic release |
-| `./scripts/ci/semantic-release-publish.sh` | publish the semantic release      |
+| command                                    | purpose                          |
+| ------------------------------------------ | -------------------------------- |
+| `./scripts/ci/go-lint.sh`                  | run `go vet` and `golangci-lint` |
+| `./scripts/ci/go-test.sh`                  | run tests with coverage          |
+| `./scripts/ci/markdownlint.sh`             | run Markdown linting             |
+| `./scripts/ci/security-scan.sh`            | run `govulncheck` and Semgrep    |
+| `./scripts/ci/supply-chain-scan.sh`        | run Trivy and Gitleaks           |
+| `./scripts/ci/semantic-release-publish.sh` | publish the semantic release     |
 
 GitHub Actions uses `TOOLCHAIN_REGISTRY` and `TOOLCHAIN_IMAGE_NAMESPACE` to
-resolve the shared Zot toolchain images. GitLab CI uses full image-reference
-variables so the private mirror can point at Harbor without changing these
-scripts:
-
-| GitLab variable                   | purpose                                     |
-| --------------------------------- | ------------------------------------------- |
-| `CI_IMAGE_TOOLCHAIN_IMAGE`        | image for Go lint and test jobs             |
-| `CI_SECURITY_TOOLCHAIN_IMAGE`     | image for `govulncheck` and Semgrep         |
-| `CI_SUPPLY_CHAIN_TOOLCHAIN_IMAGE` | image for Trivy and Gitleaks                |
-| `CI_RELEASE_TOOLCHAIN_IMAGE`      | image for Markdownlint and semantic-release |
-| `GITLAB_AMD64_RUNNER_TAG`         | optional runner tag override                |
-| `GL_TOKEN` or `GITLAB_TOKEN`      | GitLab semantic-release API/write token     |
-
-`release.config.cjs` selects the GitHub or GitLab semantic-release plugin from
-the `GITLAB_CI` environment flag, so GitHub and GitLab can publish releases
-from the same repository files.
+resolve the shared Zot toolchain images.
 
 `GO_TEST_RACE=true` or `GO_TEST_CGO=true` requires a C compiler in the selected
 toolchain image. `lib-orm` sets `GO_TEST_RACE=false` in GitHub Actions while
@@ -309,13 +293,16 @@ Use `-copy` when service code may need the full nested value, usually to create
 a missing child row before applying PATCH field updates. Buckets are for SQL
 field maps; copies are for carrying nested create data.
 
-## requirements
+## prerequisites
 
-- go 1.26 or higher
+Install the third-party CLIs this repo expects. Match `go.mod` for the Go
+version.
 
-Optional:
+### macOS (Homebrew)
 
-- [prettier](https://prettier.io/) for Markdown, YAML, JSON, and JSONC formatting
+```bash
+brew install go golangci-lint prettier markdownlint-cli2
+```
 
 ## available commands
 

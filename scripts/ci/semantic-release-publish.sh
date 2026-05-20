@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-repo_dir="${CI_PROJECT_DIR:-$(pwd)}"
+repo_dir="$(pwd)"
 cd "${repo_dir}"
 
 git config --global --add safe.directory "${repo_dir}" 2>/dev/null || true
@@ -15,6 +15,5 @@ exec npx --yes \
 	--package @semantic-release/commit-analyzer@13.0.1 \
 	--package @semantic-release/release-notes-generator@14.1.1 \
 	--package @semantic-release/github@12.0.8 \
-	--package @semantic-release/gitlab@13.3.2 \
 	--package conventional-changelog-conventionalcommits@9.3.1 \
 	semantic-release "$@"
