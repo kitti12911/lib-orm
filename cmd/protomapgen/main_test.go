@@ -269,6 +269,104 @@ targets:
 	assert.True(t, cfg[0].GoSelf, "out dir == go_dir should set GoSelf")
 }
 
+func TestRenderGroupMergesMultipleTargets(t *testing.T) {
+	bunDir := writeFile(t, bunModel)
+	bunFields, bunIsBun, err := parseStruct(bunDir, "Example")
+	require.NoError(t, err)
+
+	plainDir := writeFile(t, plainStruct)
+	plainFields, plainIsBun, err := parseStruct(plainDir, "CreateParams")
+	require.NoError(t, err)
+
+	// Two targets sharing the same Out (1 to_proto from a bun model, 1
+	// from_proto from a plain Go struct) should merge into one file with
+	// deduplicated imports.
+	bunCfg := bunBaseConfig(bunDir)
+	bunCfg.Direction = dirToProto
+	bunCfg.Out = filepath.Join(t.TempDir(), "merged.go")
+
+	plainCfg := targetConfig{
+		GoDir:         plainDir,
+		GoImport:      "example.com/svc/internal/feature/user",
+		GoAlias:       "user",
+		GoType:        "CreateParams",
+		ProtoImport:   "example.com/svc/gen/grpc/example/v1", // same proto module as bunCfg
+		ProtoAlias:    "examplev1",
+		ProtoType:     "Example",
+		Direction:     dirFromProto,
+		FuncFromProto: "createParamsFromProto",
+		TargetPointer: false,
+		Package:       "feature",
+		Out:           bunCfg.Out, // shared
+		Exclude:       map[string]bool{},
+		Converters: map[string]converterPair{
+			"Status":  {FromProto: "exampleStatusFromProto"},
+			"Profile": {FromProto: "createProfileFromProto"},
+		},
+	}
+
+	members := []genMember{
+		{cfg: bunCfg, fields: bunFields, isBun: bunIsBun},
+		{cfg: plainCfg, fields: plainFields, isBun: plainIsBun},
+	}
+	require.NoError(t, validateGroup(members))
+
+	src, err := renderGroup(members)
+	require.NoError(t, err)
+	out := string(src)
+
+	// One package decl, both functions present in YAML order.
+	assert.Equal(t, 1, strings.Count(out, "\npackage feature\n"))
+	assert.True(t, strings.Index(out, "func ExampleToProto(") < strings.Index(out, "func createParamsFromProto("),
+		"functions should appear in YAML order")
+
+	// Shared proto import appears exactly once.
+	assert.Equal(t, 1, strings.Count(out, `examplev1 "example.com/svc/gen/grpc/example/v1"`))
+
+	// Both go-side imports appear (bun: database; plain: user).
+	assert.Contains(t, out, `database "example.com/svc/internal/database"`)
+	assert.Contains(t, out, `user "example.com/svc/internal/feature/user"`)
+
+	// timestamppb only imported once even if multiple to_proto members need it.
+	assert.LessOrEqual(t, strings.Count(out, `"google.golang.org/protobuf/types/known/timestamppb"`), 1)
+}
+
+func TestValidateGroupRejectsPackageMismatch(t *testing.T) {
+	dir := writeFile(t, bunModel)
+	fields, isBun, err := parseStruct(dir, "Example")
+	require.NoError(t, err)
+
+	a := bunBaseConfig(dir)
+	a.Package = "alpha"
+	b := bunBaseConfig(dir)
+	b.Package = "beta"
+
+	err = validateGroup([]genMember{
+		{cfg: a, fields: fields, isBun: isBun},
+		{cfg: b, fields: fields, isBun: isBun},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disagree on package")
+}
+
+func TestValidateGroupRejectsAliasConflict(t *testing.T) {
+	dir := writeFile(t, bunModel)
+	fields, isBun, err := parseStruct(dir, "Example")
+	require.NoError(t, err)
+
+	a := bunBaseConfig(dir)
+	a.ProtoAlias = "examplev1"
+	b := bunBaseConfig(dir)
+	b.ProtoAlias = "v1ex" // same path, different alias
+
+	err = validateGroup([]genMember{
+		{cfg: a, fields: fields, isBun: isBun},
+		{cfg: b, fields: fields, isBun: isBun},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting aliases")
+}
+
 func TestGenerateDirectionFilter(t *testing.T) {
 	dir := writeFile(t, bunModel)
 	fields, isBun, err := parseStruct(dir, "Example")
