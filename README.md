@@ -12,6 +12,7 @@ lib-orm/
 ├── orm.go                # database setup, migrations, fixtures
 ├── query.go              # filter, order, and patch query helpers
 ├── transaction.go        # context-aware transaction provider
+├── uuid.go               # dialect-portable UUID scanner/value
 ├── Makefile
 ├── go.mod
 └── README.md
@@ -134,6 +135,36 @@ _, err := txProvider.IDB(ctx).NewUpdate().
     Where("id = ?", id).
     Exec(ctx)
 ```
+
+### uuid
+
+`orm.UUID` is a dialect-portable UUID column rendered as its canonical
+lowercase string. It scans SQL Server `uniqueidentifier` bytes and PostgreSQL
+`uuid`/text alike, so models can use a plain `Model()` select instead of
+per-dialect `CONVERT` expressions. Its zero value is the empty string, which
+`Value` encodes as `NULL` so a column `DEFAULT` can generate the id on insert.
+
+```go
+type User struct {
+    bun.BaseModel `bun:"table:users,alias:u"`
+
+    ID   orm.UUID `bun:"id,pk,nullzero,default:gen_random_uuid()"`
+    Name string   `bun:"name"`
+}
+
+var id orm.UUID
+_, err := db.IDB(ctx).NewInsert().
+    Model(user).
+    Returning("id").
+    Exec(ctx, &id)
+
+err = db.IDB(ctx).NewSelect().
+    Model(user).
+    Where("u.id = ?", id.String()).
+    Scan(ctx)
+```
+
+Nullable foreign keys can use `*orm.UUID`.
 
 ### query helpers
 
