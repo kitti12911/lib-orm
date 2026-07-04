@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/kitti12911/lib-orm/v3/internal/codegen"
+	"github.com/kitti12911/lib-orm/v4/internal/codegen"
 )
 
 func TestIsWalkableRelation(t *testing.T) {
@@ -32,11 +32,39 @@ func TestIsWalkableRelation(t *testing.T) {
 	}
 }
 
-func TestStringList(t *testing.T) {
-	var list stringList
-	require.NoError(t, list.Set("User"))
-	require.Error(t, list.Set(""))
-	assert.Equal(t, "User", list.String())
+func TestIsForwardRelation(t *testing.T) {
+	tests := map[string]bool{
+		"rel:has-one,join:id=user_id":      true,
+		"rel:has-many,join:id=user_id":     true,
+		"rel:many-to-many,join:user_id=id": true,
+		"rel:belongs-to,join:user_id=id":   false,
+		"column_name,type:uuid":            false,
+	}
+
+	for tag, want := range tests {
+		t.Run(tag, func(t *testing.T) {
+			assert.Equal(t, want, isForwardRelation(tag))
+		})
+	}
+}
+
+func TestDiscoverRoots(t *testing.T) {
+	models := map[string]model{
+		"User": {name: "User", relations: []relation{
+			{name: "Profile", model: "UserProfile", walk: true, forward: true},
+		}},
+		"UserProfile": {name: "UserProfile", relations: []relation{
+			{name: "User", model: "User", walk: true, forward: false},          // belongs-to back-ref
+			{name: "Address", model: "UserAddress", walk: true, forward: true}, // has-one
+		}},
+		"UserAddress": {name: "UserAddress", relations: []relation{
+			{name: "Profile", model: "UserProfile", walk: true, forward: false}, // belongs-to back-ref
+		}},
+	}
+
+	// Only User is a root: UserProfile and UserAddress are forward-relation
+	// targets; the belongs-to back-references to User/UserProfile don't demote them.
+	assert.Equal(t, []string{"User"}, discoverRoots(models))
 }
 
 func TestParseModelDirAndVisit(t *testing.T) {
@@ -262,121 +290,80 @@ func TestQueryAlias(t *testing.T) {
 	assert.Equal(t, "profile__address", queryAlias(model{alias: "ua"}, "profile.address"))
 }
 
-func TestRunGeneratesOutput(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "model.go"), `
+func writeModel(t *testing.T, dir, contents string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "internal", "database"), 0o755))
+	writeFile(t, filepath.Join(dir, "internal", "database", "model.go"), contents)
+}
+
+const fixtureModel = `
 package database
 
 import "github.com/uptrace/bun"
 
 type User struct {
-	bun.BaseModel `+"`bun:\"table:users,alias:u\"`"+`
-	ID string `+"`bun:\"id,pk\"`"+`
-	Email string `+"`bun:\"email\"`"+`
+	bun.BaseModel ` + "`bun:\"table:users,alias:u\"`" + `
+	ID string ` + "`bun:\"id,pk\"`" + `
+	Email string ` + "`bun:\"email\"`" + `
+	Profile *UserProfile ` + "`bun:\"rel:has-one,join:id=user_id\"`" + `
 }
-`)
-	out := filepath.Join(t.TempDir(), "out", "fieldmap_generated.go")
 
-	err := Run([]string{
-		"-model-dir", dir,
-		"-out", out,
-		"-package", "database",
-		"-root", "User",
-	})
-	require.NoError(t, err)
+type UserProfile struct {
+	bun.BaseModel ` + "`bun:\"table:user_profiles,alias:up\"`" + `
+	ID string ` + "`bun:\"id,pk\"`" + `
+	UserID string ` + "`bun:\"user_id\"`" + `
+	User *User ` + "`bun:\"rel:belongs-to,join:user_id=id\"`" + `
+}
+`
 
-	data, err := os.ReadFile(out)
+func TestRunGeneratesOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeModel(t, dir, fixtureModel)
+
+	require.NoError(t, Run([]string{"-C", dir}))
+
+	data, err := os.ReadFile(filepath.Join(dir, "gen", "database", "fieldmap_generated.go"))
 	require.NoError(t, err)
 	got := string(data)
 	assert.Contains(t, got, "package database")
 	assert.Contains(t, got, "var UserRootFields = map[string]string{")
+	assert.Contains(t, got, "var UserProfileFields = map[string]string{")
 	assert.Contains(t, got, "var UserColumns = map[string]string{")
 	assert.Contains(t, got, `"email": "email"`)
-	// Validator functions and the RootNestedName const are no longer emitted.
-	assert.NotContains(t, got, "func IsUserRootField")
-	assert.NotContains(t, got, "RootNestedName")
+	// UserProfile is a forward-relation child, so it is not an independent root.
+	assert.NotContains(t, got, "var UserProfileColumns")
 }
 
 func TestRunErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-		want string
-	}{
-		{
-			name: "missing root",
-			args: []string{"-model-dir", t.TempDir(), "-out", "/tmp/x.go"},
-			want: "at least one -root is required",
-		},
-		{
-			name: "model dir missing",
-			args: []string{"-model-dir", filepath.Join(t.TempDir(), "nope"), "-out", "/tmp/x.go", "-root", "User"},
-			want: "read model directory",
-		},
-		{
-			name: "unknown root",
-			args: []string{"-model-dir", t.TempDir(), "-out", "/tmp/x.go", "-root", "Ghost"},
-			want: "Ghost model not found",
-		},
-		{
-			name: "flag parse error",
-			args: []string{"-not-a-flag"},
-			want: "flag provided but not defined",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := Run(tt.args)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.want)
-		})
-	}
-}
-
-func TestRunFormatSourceError(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "model.go"), `
-package database
-
-import "github.com/uptrace/bun"
-
-type User struct {
-	bun.BaseModel `+"`bun:\"table:users,alias:u\"`"+`
-	ID string `+"`bun:\"id,pk\"`"+`
-}
-`)
-	err := Run([]string{
-		"-model-dir", dir,
-		"-out", filepath.Join(t.TempDir(), "out.go"),
-		"-package", "1invalid",
-		"-root", "User",
+	t.Run("flag parse error", func(t *testing.T) {
+		err := Run([]string{"-not-a-flag"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "flag provided but not defined")
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "format generated source")
+
+	t.Run("model dir missing", func(t *testing.T) {
+		err := Run([]string{"-C", t.TempDir()})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "read model directory")
+	})
+
+	t.Run("no root models", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "internal", "database"), 0o755))
+		writeFile(t, filepath.Join(dir, "internal", "database", "model.go"), "package database\n")
+		err := Run([]string{"-C", dir})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no root models found")
+	})
 }
 
 func TestRunMkdirError(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "model.go"), `
-package database
+	writeModel(t, dir, fixtureModel)
+	// Block creation of <dir>/gen by planting a file there.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "gen"), []byte{}, 0o600))
 
-import "github.com/uptrace/bun"
-
-type User struct {
-	bun.BaseModel `+"`bun:\"table:users,alias:u\"`"+`
-	ID string `+"`bun:\"id,pk\"`"+`
-}
-`)
-	blocker := filepath.Join(t.TempDir(), "blocker")
-	require.NoError(t, os.WriteFile(blocker, []byte{}, 0o600))
-
-	err := Run([]string{
-		"-model-dir", dir,
-		"-out", filepath.Join(blocker, "sub", "out.go"),
-		"-package", "database",
-		"-root", "User",
-	})
+	err := Run([]string{"-C", dir})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mkdir")
 }

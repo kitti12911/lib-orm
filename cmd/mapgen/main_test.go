@@ -26,7 +26,8 @@ func TestMainExitsOnError(t *testing.T) {
 		wantErr  string
 	}{
 		"unknown subcommand": {arg: "bogus", wantCode: 2, wantErr: "unknown subcommand"},
-		"subcommand error":   {arg: "proto", wantCode: 1, wantErr: "mapgen proto:"},
+		// "fields" fails in the test cwd (no internal/database) -> runtime error, exit 1.
+		"subcommand error": {arg: "fields", wantCode: 1, wantErr: "mapgen fields:"},
 	}
 
 	for name, tc := range cases {

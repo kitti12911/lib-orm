@@ -1,4 +1,4 @@
-module github.com/kitti12911/lib-orm/v3
+module github.com/kitti12911/lib-orm/v4
 
 go 1.26.4
 

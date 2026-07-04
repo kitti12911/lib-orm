@@ -1,32 +1,23 @@
 // Package patchfield implements the "mapgen patch" subcommand: it generates
-// per-field patch dispatchers for partial-update handlers. Given a Go struct
-// describing the patch payload and a set of buckets that group fields by their
-// destination map, it emits a function that walks the requested field paths and
-// copies each value into the right bucket map.
+// per-field patch dispatchers for partial-update handlers with zero
+// configuration.
 //
-// Configuration is supplied via a YAML file:
+//	mapgen patch    # discovers every feature under internal/feature/<f>/
 //
-//	mapgen patch -config patchfields.yaml
+// For each feature package it looks for a PatchParams struct — one that carries
+// a single struct-typed payload field plus a []string paths field (and usually
+// an ID). From the payload struct's `field:"..."`-tagged shape it derives the
+// bucket layout (one map per nesting level), the guarded copies for nested
+// pointers, and the patchData struct itself, then emits
+// internal/feature/<f>/patch_generated.go: the patchData type and a
+// patchFields(params PatchParams) patchData dispatcher.
 //
-// A single config file can describe many targets, each producing one output
-// file. Top-level keys (function, param_type, data_type) act as defaults
-// inherited by every target unless that target overrides them.
-//
-// The generated code restricts writes to fields tagged with `field:"..."` in
-// the source struct, so it carries no extra runtime allowlist check. If a path
-// arrives that has no matching `case`, the switch silently falls through; if a
-// path matches but the target column has been removed from the database, the
-// downstream SQL UPDATE fails loudly rather than silently dropping the field.
-//
-// Earlier versions of this tool accepted everything via individual command-line
-// flags and emitted a per-field validator call. Both are gone; pinning to a
-// previous generator release keeps old invocations working, but upgrading
-// requires switching to a YAML config and regenerating the output file.
+// The generated code restricts writes to fields tagged with `field:"..."` in the
+// payload struct, so it carries no extra runtime allowlist check.
 package patchfield
 
 import (
 	"bytes"
-	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -39,14 +30,18 @@ import (
 	"sort"
 	"strings"
 
-	"gopkg.in/yaml.v3"
-
-	"github.com/kitti12911/lib-orm/v3/internal/codegen"
+	"github.com/kitti12911/lib-orm/v4/internal/codegen"
 )
 
-// field is the fully-resolved info needed to emit one `case` clause: which
-// path the caller will request, which bucket map receives the value, and the
-// dotted Go selector used to read the value from params.
+const (
+	featureDirRel   = "internal/feature"
+	outFileName     = "patch_generated.go"
+	patchParamsType = "PatchParams"
+	functionName    = "patchFields"
+	dataType        = "patchData"
+)
+
+// field is the fully-resolved info needed to emit one `case` clause.
 type field struct {
 	path     string
 	key      string
@@ -55,8 +50,8 @@ type field struct {
 	mapField string
 }
 
-// model captures one struct type from the parsed source file along with the
-// subset of its fields that participate in patches (tagged with `field:"..."`).
+// model captures one struct type along with the subset of its fields that
+// participate in patches (tagged with `field:"..."`).
 type model struct {
 	name   string
 	fields []modelField
@@ -76,114 +71,63 @@ type bucket struct {
 	mapField string
 }
 
-// copyRule expresses a guarded pointer copy emitted before the path switch.
-// It produces `if guards... && source != nil { target = *source }`.
+// copyRule expresses a guarded pointer copy emitted before the path switch:
+// `if guards... && source != nil { target = *source }`. field/typeName describe
+// the corresponding patchData struct field.
 type copyRule struct {
-	source string
-	target string
-	guards []string
+	source   string
+	target   string
+	guards   []string
+	field    string
+	typeName string
 }
 
-// generateSpec is the fully-resolved input to one generation run. Every YAML
-// target translates into one generateSpec before invoking generate().
+// dataStructField is one field of the generated patchData struct.
+type dataStructField struct {
+	name string
+	typ  string
+}
+
+// generateSpec is the fully-resolved input to one generation run.
 type generateSpec struct {
-	file          string
-	root          string
-	out           string
-	packageName   string
-	functionName  string
-	paramType     string
-	dataType      string
-	rootSelector  string
-	pathsSelector string
-	buckets       []bucket
-	copyRules     []copyRule
-	setClauses    *setClausesSpec
+	file             string
+	root             string
+	out              string
+	packageName      string
+	rootSelector     string
+	pathsSelector    string
+	buckets          []bucket
+	copyRules        []copyRule
+	dataStructFields []dataStructField
 }
 
-// setClausesSpec is the resolved set_clauses config. cols is populated in
-// generate() once the root struct has been parsed.
-type setClausesSpec struct {
-	funcName  string
-	bitFunc   string
-	bitImport string
-	cols      []setCol
-}
-
-// setCol is one column emitted in the SET-clause switch.
-type setCol struct {
-	column string // snake column name (the field tag)
-	isBool bool   // bool fields get the bit conversion
-}
-
-// yamlConfig mirrors the on-disk YAML schema. Top-level keys provide defaults
-// inherited by every target unless that target overrides them. Targets is
-// required and must be non-empty.
-type yamlConfig struct {
-	ParamType string       `yaml:"param_type"`
-	DataType  string       `yaml:"data_type"`
-	Function  string       `yaml:"function"`
-	Targets   []yamlTarget `yaml:"targets"`
-}
-
-type yamlTarget struct {
-	File          string          `yaml:"file"`
-	Root          string          `yaml:"root"`
-	Out           string          `yaml:"out"`
-	Package       string          `yaml:"package"`
-	Function      string          `yaml:"function"`
-	ParamType     string          `yaml:"param_type"`
-	DataType      string          `yaml:"data_type"`
-	RootSelector  string          `yaml:"root_selector"`
-	PathsSelector string          `yaml:"paths_selector"`
-	Buckets       []yamlBucket    `yaml:"buckets"`
-	Copies        []yamlCopy      `yaml:"copies"`
-	SetClauses    *yamlSetClauses `yaml:"set_clauses"`
-}
-
-// yamlSetClauses, when present, asks the generator to additionally emit a
-// raw-SQL SET-clause builder for the root struct's columns (used by
-// repositories that issue raw UPDATEs instead of the ORM query builder).
-type yamlSetClauses struct {
-	Func string `yaml:"func"`
-	// BitFunc converts bool fields before binding (e.g. database.Bit); empty
-	// means bools bind as-is. BitImport is its package import path.
-	BitFunc   string `yaml:"bit_func"`
-	BitImport string `yaml:"bit_import"`
-}
-
-type yamlBucket struct {
-	// Path is the path prefix this bucket captures. Empty string (or just
-	// omitting the key) means the top-level fields with no prefix.
-	Path     string `yaml:"path"`
-	MapField string `yaml:"map_field"`
-}
-
-type yamlCopy struct {
-	Source string   `yaml:"source"`
-	Target string   `yaml:"target"`
-	Guards []string `yaml:"guards"`
-}
-
-// Run parses the -config flag and runs the generation pipeline once per target
-// listed in the YAML config.
+// Run discovers every feature package and generates a patch dispatcher for each
+// one that declares a PatchParams struct. -C sets the repo root.
 func Run(args []string) error {
 	fs := flag.NewFlagSet("mapgen patch", flag.ContinueOnError)
-	configPath := fs.String("config", "", "Path to a YAML config file describing one or more generation targets")
+	dir := fs.String("C", ".", "repo root directory")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
 	}
 
-	if *configPath == "" {
-		return errors.New("-config is required")
-	}
-
-	specs, err := specsFromConfig(*configPath)
+	featureRoot := filepath.Join(*dir, featureDirRel)
+	entries, err := os.ReadDir(featureRoot)
 	if err != nil {
-		return err
+		return fmt.Errorf("read feature directory: %w", err)
 	}
 
-	for _, spec := range specs {
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		featureDir := filepath.Join(featureRoot, entry.Name())
+		spec, ok, err := specFromFeature(featureDir)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
 		if err := generate(spec); err != nil {
 			return fmt.Errorf("generate %s: %w", spec.out, err)
 		}
@@ -191,138 +135,218 @@ func Run(args []string) error {
 	return nil
 }
 
-// specsFromConfig loads the YAML config and produces one spec per target. Each
-// target inherits unset string fields from the top-level config defaults so the
-// caller can DRY shared values like fieldmap_import.
-func specsFromConfig(path string) ([]generateSpec, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // generator is run by trusted operators on trusted config files
+// specFromFeature derives a generateSpec from a feature package by convention.
+// ok is false when the package declares no PatchParams (nothing to generate) or
+// is marked //mapgen:ignore.
+func specFromFeature(dir string) (generateSpec, bool, error) {
+	pkg, ignore, patch, models, err := parseFeature(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read config %q: %w", path, err)
+		return generateSpec{}, false, err
+	}
+	if ignore || patch == nil {
+		return generateSpec{}, false, nil
 	}
 
-	var cfg yamlConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse config %q: %w", path, err)
-	}
+	buckets, copyRules, dataFields := derivePatchStructure(models, patch, pkg)
 
-	if len(cfg.Targets) == 0 {
-		return nil, fmt.Errorf("config %q: targets must not be empty", path)
-	}
-
-	specs := make([]generateSpec, 0, len(cfg.Targets))
-	for i, t := range cfg.Targets {
-		spec, err := specFromTarget(cfg, t)
-		if err != nil {
-			return nil, fmt.Errorf("config %q target[%d]: %w", path, i, err)
-		}
-		specs = append(specs, spec)
-	}
-	return specs, nil
-}
-
-// resolveBuckets validates the bucket list and sorts it so the longest path
-// prefix wins during lookup, routing nested paths to the most specific bucket.
-func resolveBuckets(in []yamlBucket) ([]bucket, error) {
-	buckets := make([]bucket, 0, len(in))
-	for _, b := range in {
-		if b.MapField == "" {
-			return nil, fmt.Errorf("bucket %q: map_field is required", b.Path)
-		}
-		buckets = append(buckets, bucket{prefix: b.Path, mapField: b.MapField})
-	}
-	sort.SliceStable(buckets, func(i, j int) bool {
-		return len(buckets[i].prefix) > len(buckets[j].prefix)
+	// Sort buckets so the longest prefix wins during path lookup.
+	sortedBuckets := append([]bucket(nil), buckets...)
+	sort.SliceStable(sortedBuckets, func(i, j int) bool {
+		return len(sortedBuckets[i].prefix) > len(sortedBuckets[j].prefix)
 	})
-	return buckets, nil
-}
-
-// resolveCopyRules validates the guarded-copy rules emitted before the path switch.
-func resolveCopyRules(in []yamlCopy) ([]copyRule, error) {
-	out := make([]copyRule, 0, len(in))
-	for _, c := range in {
-		if c.Source == "" || c.Target == "" {
-			return nil, errors.New("copy rule: source and target are required")
-		}
-		out = append(out, copyRule{
-			source: c.Source,
-			target: c.Target,
-			guards: append([]string(nil), c.Guards...),
-		})
-	}
-	return out, nil
-}
-
-// resolveSetClauses validates and resolves the optional set_clauses block. The
-// column list is filled later in generate() once the root struct is parsed.
-func resolveSetClauses(in *yamlSetClauses) (*setClausesSpec, error) {
-	if in == nil {
-		return nil, nil
-	}
-	if in.Func == "" {
-		return nil, errors.New("set_clauses: func is required")
-	}
-	if in.BitFunc != "" && in.BitImport == "" {
-		return nil, errors.New("set_clauses: bit_import is required when bit_func is set")
-	}
-	return &setClausesSpec{
-		funcName:  in.Func,
-		bitFunc:   in.BitFunc,
-		bitImport: in.BitImport,
-	}, nil
-}
-
-// specFromTarget resolves a yamlTarget into a generateSpec, inheriting defaults
-// from the surrounding yamlConfig and applying built-in defaults for the
-// optional string fields.
-func specFromTarget(cfg yamlConfig, t yamlTarget) (generateSpec, error) {
-	first := func(values ...string) string {
-		for _, v := range values {
-			if v != "" {
-				return v
-			}
-		}
-		return ""
-	}
-
-	if t.File == "" || t.Root == "" || t.Out == "" || t.Package == "" ||
-		t.RootSelector == "" || t.PathsSelector == "" || len(t.Buckets) == 0 {
-		return generateSpec{}, errors.New("file, root, out, package, root_selector, paths_selector, and buckets are required")
-	}
-
-	buckets, err := resolveBuckets(t.Buckets)
-	if err != nil {
-		return generateSpec{}, err
-	}
-
-	copyRules, err := resolveCopyRules(t.Copies)
-	if err != nil {
-		return generateSpec{}, err
-	}
-
-	setClauses, err := resolveSetClauses(t.SetClauses)
-	if err != nil {
-		return generateSpec{}, err
-	}
 
 	return generateSpec{
-		file:          t.File,
-		root:          t.Root,
-		out:           t.Out,
-		packageName:   t.Package,
-		functionName:  first(t.Function, cfg.Function, "patchFields"),
-		paramType:     first(t.ParamType, cfg.ParamType, "PatchParams"),
-		dataType:      first(t.DataType, cfg.DataType, "patchData"),
-		rootSelector:  t.RootSelector,
-		pathsSelector: t.PathsSelector,
-		buckets:       buckets,
-		copyRules:     copyRules,
-		setClauses:    setClauses,
-	}, nil
+		file:             dir,
+		root:             patch.payloadType,
+		out:              filepath.Join(dir, outFileName),
+		packageName:      pkg,
+		rootSelector:     "params." + patch.payloadField,
+		pathsSelector:    "params." + patch.pathsField,
+		buckets:          sortedBuckets,
+		copyRules:        copyRules,
+		dataStructFields: dataFields,
+	}, true, nil
 }
 
-// generate runs the full pipeline for one spec: parse the source, walk the
-// struct tree to collect every patchable field, emit Go source, gofmt it, and
-// atomically write it to disk.
+// patchParams captures the shape of a discovered PatchParams struct.
+type patchParams struct {
+	payloadField string // e.g. "User"
+	payloadType  string // e.g. "CreateParams"
+	pathsField   string // e.g. "Fields"
+}
+
+// parseFeature parses every non-test .go file in dir and returns the package
+// name, whether the package is //mapgen:ignore'd, the discovered PatchParams (or
+// nil), and the `field:"..."`-tagged model graph.
+func parseFeature(dir string) (pkg string, ignore bool, patch *patchParams, models map[string]model, err error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", false, nil, nil, fmt.Errorf("read feature directory: %w", err)
+	}
+
+	models = make(map[string]model)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") ||
+			strings.HasSuffix(name, "_test.go") || name == outFileName {
+			continue
+		}
+		fset := token.NewFileSet()
+		file, perr := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.ParseComments)
+		if perr != nil {
+			return "", false, nil, nil, fmt.Errorf("parse feature file: %w", perr)
+		}
+		pkg = file.Name.Name
+		if file.Doc != nil && directivePresent(file.Doc) {
+			ignore = true
+		}
+		collectStructs(file, models, &patch)
+	}
+	return pkg, ignore, patch, models, nil
+}
+
+func directivePresent(group *ast.CommentGroup) bool {
+	for _, c := range group.List {
+		if strings.Contains(c.Text, "mapgen:ignore") {
+			return true
+		}
+	}
+	return false
+}
+
+func collectStructs(file *ast.File, models map[string]model, patch **patchParams) {
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			strct, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			models[typeSpec.Name.Name] = parseModel(typeSpec.Name.Name, strct)
+			if typeSpec.Name.Name == patchParamsType {
+				if p := detectPatchParams(strct); p != nil {
+					*patch = p
+				}
+			}
+		}
+	}
+}
+
+// detectPatchParams recognizes a PatchParams struct: exactly one field of a bare
+// named struct type (the payload) and one []string field (the paths). Returns
+// nil when the shape doesn't match.
+func detectPatchParams(strct *ast.StructType) *patchParams {
+	var (
+		payloadField, payloadType, pathsField string
+		payloadCount                          int
+	)
+	for _, f := range strct.Fields.List {
+		if len(f.Names) == 0 {
+			continue
+		}
+		name := f.Names[0].Name
+		switch t := f.Type.(type) {
+		case *ast.Ident:
+			// A bare named type: candidate payload (skip primitives like string).
+			if isExportedType(t.Name) {
+				payloadField = name
+				payloadType = t.Name
+				payloadCount++
+			}
+		case *ast.ArrayType:
+			if id, ok := t.Elt.(*ast.Ident); ok && id.Name == "string" && t.Len == nil {
+				pathsField = name
+			}
+		}
+	}
+	if payloadCount != 1 || payloadField == "" || pathsField == "" {
+		return nil
+	}
+	return &patchParams{payloadField: payloadField, payloadType: payloadType, pathsField: pathsField}
+}
+
+func isExportedType(name string) bool {
+	return name != "" && name[0] >= 'A' && name[0] <= 'Z'
+}
+
+// derivePatchStructure walks the payload struct to produce the bucket layout,
+// guarded copies, and patchData struct fields. Buckets are returned in nesting
+// order (root first).
+func derivePatchStructure(models map[string]model, patch *patchParams, pkg string) ([]bucket, []copyRule, []dataStructField) {
+	buckets := []bucket{{prefix: "", mapField: pkg + "Fields"}}
+	var copies []copyRule
+
+	seen := map[string]bool{}
+	var walk func(typeName, prefix, selector string, guards []string)
+	walk = func(typeName, prefix, selector string, guards []string) {
+		if seen[typeName] {
+			return
+		}
+		m, ok := models[typeName]
+		if !ok {
+			return
+		}
+		seen[typeName] = true
+		defer delete(seen, typeName)
+
+		for _, mf := range m.fields {
+			if _, isStruct := models[mf.typeName]; !isStruct {
+				continue
+			}
+			path := mf.tag
+			if prefix != "" {
+				path = prefix + "." + mf.tag
+			}
+			childSelector := selector + "." + mf.name
+
+			buckets = append(buckets, bucket{prefix: path, mapField: lastSegment(path) + "Fields"})
+
+			if mf.isPointer {
+				copies = append(copies, copyRule{
+					source:   childSelector,
+					target:   "data." + mf.tag,
+					guards:   append([]string(nil), guards...),
+					field:    mf.tag,
+					typeName: mf.typeName,
+				})
+			}
+
+			childGuards := guards
+			if mf.isPointer {
+				childGuards = append(append([]string(nil), guards...), childSelector)
+			}
+			walk(mf.typeName, path, childSelector, childGuards)
+		}
+	}
+	walk(patch.payloadType, "", "params."+patch.payloadField, nil)
+
+	dataFields := make([]dataStructField, 0, len(buckets)+len(copies))
+	for _, b := range buckets {
+		dataFields = append(dataFields, dataStructField{name: b.mapField, typ: "map[string]any"})
+	}
+	for _, c := range copies {
+		dataFields = append(dataFields, dataStructField{name: c.field, typ: c.typeName})
+	}
+
+	return buckets, copies, dataFields
+}
+
+func lastSegment(path string) string {
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
+// generate runs the full pipeline for one spec: collect every patchable field,
+// emit Go source, gofmt it, and atomically write it.
 func generate(spec generateSpec) error {
 	models, err := parseModels(spec.file)
 	if err != nil {
@@ -333,19 +357,6 @@ func generate(spec generateSpec) error {
 	sort.Slice(fields, func(i, j int) bool {
 		return fields[i].path < fields[j].path
 	})
-
-	if spec.setClauses != nil {
-		root, ok := models[spec.root]
-		if !ok {
-			return fmt.Errorf("set_clauses: root %q not found", spec.root)
-		}
-		for _, mf := range root.fields {
-			spec.setClauses.cols = append(spec.setClauses.cols, setCol{
-				column: mf.tag,
-				isBool: mf.typeName == "bool",
-			})
-		}
-	}
 
 	src := renderSource(spec, fields)
 	out, err := format.Source(src)
@@ -361,31 +372,27 @@ func generate(spec generateSpec) error {
 	return nil
 }
 
-// renderSource produces the un-gofmt'd Go source for one generated file. The
-// emitted function declares its data buckets, executes any unconditional copy
-// rules, then dispatches per requested path to write the value directly into
-// its bucket map, falling back to nil whenever a guarded pointer ancestor is
-// unset. Validation of which paths are writable is the caller's responsibility
-// upstream — the generator already restricts emission to fields tagged in the
-// source struct.
+// renderSource produces the un-gofmt'd Go source: the patchData struct followed
+// by the dispatcher function.
 func renderSource(spec generateSpec, fields []field) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("// Code generated by mapgen patch; DO NOT EDIT.\n\n")
 	fmt.Fprintf(&buf, "package %s\n\n", spec.packageName)
-	if spec.setClauses != nil {
-		writeSetClauseImports(&buf, *spec.setClauses)
-	}
-	fmt.Fprintf(&buf, "func %s(params %s) %s {\n", spec.functionName, spec.paramType, spec.dataType)
 
-	// Pre-allocate one map per bucket so the switch can index without checks.
-	fmt.Fprintf(&buf, "\tdata := %s{\n", spec.dataType)
+	fmt.Fprintf(&buf, "type %s struct {\n", dataType)
+	for _, f := range spec.dataStructFields {
+		fmt.Fprintf(&buf, "\t%s %s\n", f.name, f.typ)
+	}
+	buf.WriteString("}\n\n")
+
+	fmt.Fprintf(&buf, "func %s(params %s) %s {\n", functionName, patchParamsType, dataType)
+
+	fmt.Fprintf(&buf, "\tdata := %s{\n", dataType)
 	for _, mapField := range mapFields(spec.buckets) {
 		fmt.Fprintf(&buf, "\t\t%s: make(map[string]any),\n", mapField)
 	}
 	buf.WriteString("\t}\n\n")
 
-	// Copy rules run unconditionally up front and produce
-	// `if guards != nil && source != nil { target = *source }`.
 	for _, rule := range spec.copyRules {
 		conditions := append(append([]string{}, rule.guards...), rule.source)
 		fmt.Fprintf(&buf, "\tif %s {\n", nilConditions(conditions))
@@ -393,16 +400,11 @@ func renderSource(spec generateSpec, fields []field) []byte {
 		buf.WriteString("\t}\n\n")
 	}
 
-	// Path dispatch. For each requested path, when the pointer chain leading
-	// to the leaf is set we copy the value; otherwise we record a nil so the
-	// downstream UPDATE clears the column.
 	fmt.Fprintf(&buf, "\tfor _, path := range %s {\n", spec.pathsSelector)
 	buf.WriteString("\t\tswitch path {\n")
 	for _, f := range fields {
 		fmt.Fprintf(&buf, "\t\tcase %q:\n", f.path)
 		if guard := combinedNilGuard(f.guards); guard != "" {
-			// One combined `||` short-circuits safely: an earlier nil check
-			// prevents the later deref from panicking.
 			fmt.Fprintf(&buf, "\t\t\tif %s {\n", guard)
 			fmt.Fprintf(&buf, "\t\t\t\tdata.%s[%q] = nil\n", f.mapField, f.key)
 			buf.WriteString("\t\t\t\tcontinue\n")
@@ -414,60 +416,12 @@ func renderSource(spec generateSpec, fields []field) []byte {
 	buf.WriteString("\t}\n\n")
 	buf.WriteString("\treturn data\n")
 	buf.WriteString("}\n")
-	if spec.setClauses != nil {
-		writeSetClauses(&buf, *spec.setClauses)
-	}
 	return buf.Bytes()
 }
 
-// writeSetClauseImports emits the import block the SET-clause builder needs:
-// fmt and sort always, plus the bit-conversion package when configured.
-func writeSetClauseImports(buf *bytes.Buffer, sc setClausesSpec) {
-	buf.WriteString("import (\n")
-	buf.WriteString("\t\"fmt\"\n")
-	buf.WriteString("\t\"sort\"\n")
-	if sc.bitImport != "" {
-		fmt.Fprintf(buf, "\n\t%q\n", sc.bitImport)
-	}
-	buf.WriteString(")\n\n")
-}
-
-// writeSetClauses emits a raw-SQL SET-clause builder: it sorts the requested
-// field keys, then per known column appends a bracketed "[col] = ?" clause and
-// its bound value, converting bool columns through the configured bit func.
-// Unknown fields are rejected.
-func writeSetClauses(buf *bytes.Buffer, sc setClausesSpec) {
-	fmt.Fprintf(buf, "\nfunc %s(fields map[string]any) (setClauses []string, args []any, err error) {\n", sc.funcName)
-	buf.WriteString("\tkeys := make([]string, 0, len(fields))\n")
-	buf.WriteString("\tfor field := range fields {\n\t\tkeys = append(keys, field)\n\t}\n")
-	buf.WriteString("\tsort.Strings(keys)\n\n")
-	buf.WriteString("\tsetClauses = make([]string, 0, len(keys))\n")
-	buf.WriteString("\targs = make([]any, 0, len(keys))\n")
-	buf.WriteString("\tfor _, field := range keys {\n")
-	buf.WriteString("\t\tvalue := fields[field]\n")
-	buf.WriteString("\t\tswitch field {\n")
-	for _, c := range sc.cols {
-		fmt.Fprintf(buf, "\t\tcase %q:\n", c.column)
-		if c.isBool && sc.bitFunc != "" {
-			buf.WriteString("\t\t\tif b, ok := value.(bool); ok {\n")
-			fmt.Fprintf(buf, "\t\t\t\tvalue = %s(b)\n", sc.bitFunc)
-			buf.WriteString("\t\t\t}\n")
-		}
-		buf.WriteString("\t\t\targs = append(args, value)\n")
-		fmt.Fprintf(buf, "\t\t\tsetClauses = append(setClauses, %q)\n", "["+c.column+"] = ?")
-	}
-	buf.WriteString("\t\tdefault:\n")
-	buf.WriteString("\t\t\treturn nil, nil, fmt.Errorf(\"orm: invalid patch field %q\", field)\n")
-	buf.WriteString("\t\t}\n")
-	buf.WriteString("\t}\n\n")
-	buf.WriteString("\treturn setClauses, args, nil\n")
-	buf.WriteString("}\n")
-}
-
 // combinedNilGuard joins a chain of pointer ancestors into a single boolean
-// expression of the form `a == nil || a.b == nil || ...`. The Go `||` operator
-// short-circuits, so each subsequent dereference is only evaluated when its
-// ancestors are non-nil.
+// expression `a == nil || a.b == nil || ...`; `||` short-circuits so each
+// dereference is only evaluated when its ancestors are non-nil.
 func combinedNilGuard(guards []string) string {
 	if len(guards) == 0 {
 		return ""
@@ -479,38 +433,49 @@ func combinedNilGuard(guards []string) string {
 	return strings.Join(parts, " || ")
 }
 
-// parseModels parses path with go/parser and returns every top-level struct
-// type indexed by name. Non-struct declarations are skipped.
-func parseModels(path string) (map[string]model, error) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
+// parseModels parses every non-test .go file in dir and returns each top-level
+// struct type indexed by name.
+func parseModels(dir string) (map[string]model, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("parse model file: %w", err)
+		return nil, fmt.Errorf("read feature directory: %w", err)
 	}
 
 	models := make(map[string]model)
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.TYPE {
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") ||
+			strings.HasSuffix(name, "_test.go") || name == outFileName {
 			continue
 		}
-
-		for _, spec := range gen.Specs {
-			typeSpec := spec.(*ast.TypeSpec)
-			strct, ok := typeSpec.Type.(*ast.StructType)
-			if !ok {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.ParseComments)
+		if err != nil {
+			return nil, fmt.Errorf("parse model file: %w", err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.TYPE {
 				continue
 			}
-			models[typeSpec.Name.Name] = parseModel(typeSpec.Name.Name, strct)
+			for _, spec := range gen.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				strct, ok := typeSpec.Type.(*ast.StructType)
+				if !ok {
+					continue
+				}
+				models[typeSpec.Name.Name] = parseModel(typeSpec.Name.Name, strct)
+			}
 		}
 	}
-
 	return models, nil
 }
 
-// parseModel pulls the patch-relevant fields out of one struct. A field
-// participates only when it has both a `field:"..."` struct tag and a type
-// expression we can resolve to a name (plain identifier or pointer to one).
+// parseModel pulls the patch-relevant fields out of one struct: those with both
+// a `field:"..."` tag and a resolvable type name (ident or pointer to one).
 func parseModel(name string, strct *ast.StructType) model {
 	m := model{name: name}
 	for _, field := range strct.Fields.List {
@@ -542,9 +507,7 @@ func parseModel(name string, strct *ast.StructType) model {
 }
 
 // collectFields walks the model graph rooted at typeName and produces one field
-// entry per patchable leaf. Nested struct fields recurse; the seen map breaks
-// cyclic type references, then releases its entry on the way out so siblings
-// can revisit the same type at a different path.
+// entry per patchable leaf.
 func collectFields(
 	models map[string]model,
 	buckets []bucket,
@@ -598,9 +561,7 @@ func collectFields(
 	return fields
 }
 
-// typeName flattens a type expression into a bare identifier and a flag for
-// whether the original spelling was a pointer. Anything else (composite types,
-// generics, selector expressions) returns ("", false) so the caller skips it.
+// typeName flattens a type expression into a bare identifier and a pointer flag.
 func typeName(expr ast.Expr) (string, bool) {
 	switch expr := expr.(type) {
 	case *ast.Ident:
@@ -614,7 +575,6 @@ func typeName(expr ast.Expr) (string, bool) {
 }
 
 // bucketFor returns the most specific bucket that owns the given dotted path.
-// Buckets are pre-sorted by descending prefix length, so the first match wins.
 func bucketFor(buckets []bucket, path string) (bucket, bool) {
 	for _, bucket := range buckets {
 		if bucket.prefix == "" || path == bucket.prefix || strings.HasPrefix(path, bucket.prefix+".") {
@@ -624,8 +584,7 @@ func bucketFor(buckets []bucket, path string) (bucket, bool) {
 	return bucket{}, false
 }
 
-// mapFields returns the deduplicated bucket map names in lexicographic order so
-// the generated `data := patchData{...}` block is stable across runs.
+// mapFields returns the deduplicated bucket map names in lexicographic order.
 func mapFields(buckets []bucket) []string {
 	seen := make(map[string]bool, len(buckets))
 	fields := make([]string, 0, len(buckets))
@@ -640,8 +599,7 @@ func mapFields(buckets []bucket) []string {
 	return fields
 }
 
-// nilConditions joins `selector != nil` clauses with `&&`, used by copyRule
-// emission to guard a pointer dereference.
+// nilConditions joins `selector != nil` clauses with `&&`.
 func nilConditions(selectors []string) string {
 	conditions := make([]string, len(selectors))
 	for i, selector := range selectors {

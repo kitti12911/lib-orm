@@ -1,6 +1,7 @@
 package orm
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,6 +28,14 @@ const (
 	testProtoFilterOpBetweenExclusive testProtoFilterOp = 12
 )
 
+type testProtoLogicalOp int32
+
+const (
+	testProtoLogicalOpUnspecified testProtoLogicalOp = 0
+	testProtoLogicalOpAnd         testProtoLogicalOp = 1
+	testProtoLogicalOpOr          testProtoLogicalOp = 2
+)
+
 type testProtoOrderDirection int32
 
 const (
@@ -36,16 +45,20 @@ const (
 )
 
 type testProtoFilter struct {
-	col  string
-	op   testProtoFilterOp
-	val  string
-	vals []string
+	col     string
+	op      testProtoFilterOp
+	val     string
+	vals    []string
+	logic   testProtoLogicalOp
+	filters []testProtoFilter
 }
 
-func (f testProtoFilter) GetCol() string           { return f.col }
-func (f testProtoFilter) GetOp() testProtoFilterOp { return f.op }
-func (f testProtoFilter) GetVal() string           { return f.val }
-func (f testProtoFilter) GetVals() []string        { return f.vals }
+func (f testProtoFilter) GetCol() string                { return f.col }
+func (f testProtoFilter) GetOp() testProtoFilterOp      { return f.op }
+func (f testProtoFilter) GetVal() string                { return f.val }
+func (f testProtoFilter) GetVals() []string             { return f.vals }
+func (f testProtoFilter) GetLogic() testProtoLogicalOp  { return f.logic }
+func (f testProtoFilter) GetFilters() []testProtoFilter { return f.filters }
 
 type testProtoOrderBy struct {
 	col   string
@@ -62,88 +75,218 @@ type testPatchUser struct {
 	Email string `bun:"email"`
 }
 
-func TestApplyFilters(t *testing.T) {
-	query := bun.NewDB(nil, pgdialect.New()).NewSelect()
-	columns := map[string]string{"email": "u.email", "age": "u.age", "status": "u.status", "created_at": "u.created_at"}
-
-	err := ApplyFilters(query, []Filter{
-		{Col: "email", Op: FilterOpLike, Val: "kit"},
-		{Col: "email", Op: FilterOpLikeCI, Val: "Kit"},
-		{Col: "age", Op: FilterOpGTE, Val: "18"},
-		{Col: "status", Op: FilterOpIn, Vals: []any{"active", "pending"}},
-		{Col: "created_at", Op: FilterOpBetween, Vals: []any{"2026-01-01", "2026-01-31"}},
-		{Col: "age", Op: FilterOpBetweenExclusive, Vals: []any{"18", "60"}},
-		{Col: "email", Op: FilterOpNotNull},
-	}, columns)
-
-	require.NoError(t, err)
+func renderSelect(t *testing.T, query *bun.SelectQuery) string {
+	t.Helper()
 	sql, err := query.AppendQuery(query.DB().QueryGen(), nil)
 	require.NoError(t, err)
-	assert.Contains(t, string(sql), `"u"."email" LIKE '%kit%'`)
-	assert.Contains(t, string(sql), `LOWER("u"."email") LIKE LOWER('%Kit%')`)
-	assert.Contains(t, string(sql), `"u"."age" >= '18'`)
-	assert.Contains(t, string(sql), `"u"."status" IN ('active', 'pending')`)
-	assert.Contains(t, string(sql), `"u"."created_at" BETWEEN '2026-01-01' AND '2026-01-31'`)
-	assert.Contains(t, string(sql), `"u"."age" > '18' AND "u"."age" < '60'`)
-	assert.Contains(t, string(sql), `"u"."email" IS NOT NULL`)
+	return string(sql)
 }
 
-func TestFiltersFromProto(t *testing.T) {
-	got := FiltersFromProto([]testProtoFilter{
-		{col: "email", op: testProtoFilterOpLike, val: "kit"},
-		{col: "age", op: testProtoFilterOpGTE, val: "18"},
-		{col: "status", op: testProtoFilterOpIn, vals: []string{"active", "pending"}},
-		{col: "deleted_at", op: testProtoFilterOpNull},
-	})
-
-	assert.Equal(t, []Filter{
-		{Col: "email", Op: FilterOpLike, Val: "kit"},
-		{Col: "age", Op: FilterOpGTE, Val: "18"},
-		{Col: "status", Op: FilterOpIn, Val: "", Vals: []any{"active", "pending"}},
-		{Col: "deleted_at", Op: FilterOpNull, Val: ""},
-	}, got)
+func newSelect() *bun.SelectQuery {
+	return bun.NewDB(nil, pgdialect.New()).NewSelect()
 }
 
-func TestFilterOpFromProto(t *testing.T) {
-	tests := map[string]struct {
-		op   testProtoFilterOp
-		want FilterOp
-	}{
-		"unspecified": {op: testProtoFilterOpUnspecified, want: FilterOpExact},
-		"exact":       {op: testProtoFilterOpExact, want: FilterOpExact},
-		"like":        {op: testProtoFilterOpLike, want: FilterOpLike},
-		"gt":          {op: testProtoFilterOpGT, want: FilterOpGT},
-		"lt":          {op: testProtoFilterOpLT, want: FilterOpLT},
-		"gte":         {op: testProtoFilterOpGTE, want: FilterOpGTE},
-		"lte":         {op: testProtoFilterOpLTE, want: FilterOpLTE},
-		"null":        {op: testProtoFilterOpNull, want: FilterOpNull},
-		"not_null":    {op: testProtoFilterOpNotNull, want: FilterOpNotNull},
-		"like_ci":     {op: testProtoFilterOpLikeCI, want: FilterOpLikeCI},
-		"in":          {op: testProtoFilterOpIn, want: FilterOpIn},
-		"between":     {op: testProtoFilterOpBetween, want: FilterOpBetween},
-		"between_exclusive": {
-			op:   testProtoFilterOpBetweenExclusive,
-			want: FilterOpBetweenExclusive,
+var testColumns = map[string]string{
+	"email":      "u.email",
+	"age":        "u.age",
+	"status":     "u.status",
+	"created_at": "u.created_at",
+	"deleted_at": "u.deleted_at",
+}
+
+// group builds an AND group of the given leaves.
+func andGroup(children ...Filter) Filter { return Filter{Logic: LogicalOpAnd, Filters: children} }
+func orGroup(children ...Filter) Filter  { return Filter{Logic: LogicalOpOr, Filters: children} }
+
+func TestApplyFilterAllLeafOps(t *testing.T) {
+	query := newSelect()
+
+	err := ApplyFilter(query, andGroup(
+		Filter{Col: "email", Op: FilterOpLike, Val: "kit"},
+		Filter{Col: "email", Op: FilterOpLikeCI, Val: "Kit"},
+		Filter{Col: "age", Op: FilterOpGTE, Val: "18"},
+		Filter{Col: "status", Op: FilterOpIn, Vals: []any{"active", "pending"}},
+		Filter{Col: "created_at", Op: FilterOpBetween, Vals: []any{"2026-01-01", "2026-01-31"}},
+		Filter{Col: "age", Op: FilterOpBetweenExclusive, Vals: []any{"18", "60"}},
+		Filter{Col: "email", Op: FilterOpNotNull},
+	), testColumns, nil)
+
+	require.NoError(t, err)
+	sql := renderSelect(t, query)
+	assert.Contains(t, sql, `"u"."email" LIKE '%kit%'`)
+	assert.Contains(t, sql, `LOWER("u"."email") LIKE LOWER('%Kit%')`)
+	assert.Contains(t, sql, `"u"."age" >= '18'`)
+	assert.Contains(t, sql, `"u"."status" IN ('active', 'pending')`)
+	assert.Contains(t, sql, `"u"."created_at" BETWEEN '2026-01-01' AND '2026-01-31'`)
+	assert.Contains(t, sql, `"u"."age" > '18' AND "u"."age" < '60'`)
+	assert.Contains(t, sql, `"u"."email" IS NOT NULL`)
+}
+
+func TestApplyFilterSingleLeafRoot(t *testing.T) {
+	query := newSelect()
+
+	err := ApplyFilter(query, Filter{Col: "email", Op: FilterOpExact, Val: "kit@example.com"}, testColumns, nil)
+
+	require.NoError(t, err)
+	assert.Contains(t, renderSelect(t, query), `"u"."email" = 'kit@example.com'`)
+}
+
+func TestApplyFilterEmptyIsNoop(t *testing.T) {
+	query := newSelect()
+
+	require.NoError(t, ApplyFilter(query, Filter{}, testColumns, nil))
+	require.NoError(t, ApplyFilter(query, andGroup(), testColumns, nil))
+
+	assert.NotContains(t, renderSelect(t, query), "WHERE")
+}
+
+func TestApplyFilterOrGroup(t *testing.T) {
+	query := newSelect()
+
+	err := ApplyFilter(query, orGroup(
+		Filter{Col: "status", Op: FilterOpExact, Val: "active"},
+		Filter{Col: "status", Op: FilterOpExact, Val: "pending"},
+	), testColumns, nil)
+
+	require.NoError(t, err)
+	sql := renderSelect(t, query)
+	assert.Contains(t, sql, `"u"."status" = 'active'`)
+	assert.Contains(t, sql, `"u"."status" = 'pending'`)
+	assert.Contains(t, sql, " OR ")
+}
+
+func TestApplyFilterNestedGroup(t *testing.T) {
+	query := newSelect()
+
+	// age >= 18 AND (status = active OR status = pending)
+	err := ApplyFilter(query, andGroup(
+		Filter{Col: "age", Op: FilterOpGTE, Val: "18"},
+		orGroup(
+			Filter{Col: "status", Op: FilterOpExact, Val: "active"},
+			Filter{Col: "status", Op: FilterOpExact, Val: "pending"},
+		),
+	), testColumns, nil)
+
+	require.NoError(t, err)
+	sql := renderSelect(t, query)
+	assert.Contains(t, sql, `"u"."age" >= '18'`)
+	assert.Contains(t, sql, `"u"."status" = 'active'`)
+	assert.Contains(t, sql, " OR ")
+}
+
+func TestApplyFilterGroupInGroup(t *testing.T) {
+	query := newSelect()
+
+	err := ApplyFilter(query, andGroup(
+		andGroup(
+			Filter{Col: "email", Op: FilterOpLike, Val: "kit"},
+		),
+	), testColumns, nil)
+
+	require.NoError(t, err)
+	assert.Contains(t, renderSelect(t, query), `"u"."email" LIKE '%kit%'`)
+}
+
+func TestApplyFilterSkipsEmptyChild(t *testing.T) {
+	query := newSelect()
+
+	err := ApplyFilter(query, andGroup(
+		Filter{Col: "email", Op: FilterOpExact, Val: "kit"},
+		Filter{},   // empty leaf
+		andGroup(), // empty group
+	), testColumns, nil)
+
+	require.NoError(t, err)
+	assert.Contains(t, renderSelect(t, query), `"u"."email" = 'kit'`)
+}
+
+func TestApplyFilterCustomExpr(t *testing.T) {
+	query := newSelect()
+	custom := map[string]FilterExpr{
+		"full_name": func(f Filter) (string, []any, error) {
+			return "concat_ws(' ', p.first_name, p.last_name) ILIKE ?", []any{"%" + f.Val.(string) + "%"}, nil
 		},
 	}
 
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, tt.want, FilterOpFromProto(tt.op))
-		})
-	}
+	err := ApplyFilter(query, Filter{Col: "full_name", Op: FilterOpLike, Val: "kit"}, testColumns, custom)
+
+	require.NoError(t, err)
+	assert.Contains(t, renderSelect(t, query), `concat_ws(' ', p.first_name, p.last_name) ILIKE '%kit%'`)
 }
 
-func TestApplyFiltersReturnsInvalidField(t *testing.T) {
-	query := bun.NewDB(nil, pgdialect.New()).NewSelect()
+func TestApplyFilterCustomInsideOrGroup(t *testing.T) {
+	query := newSelect()
+	custom := map[string]FilterExpr{
+		"full_name": func(f Filter) (string, []any, error) {
+			return "concat(p.first, p.last) ILIKE ?", []any{"%x%"}, nil
+		},
+	}
 
-	err := ApplyFilters(query, []Filter{{Col: "missing", Op: FilterOpExact, Val: "x"}}, nil)
+	err := ApplyFilter(query, orGroup(
+		Filter{Col: "email", Op: FilterOpExact, Val: "a"},
+		Filter{Col: "full_name", Op: FilterOpLike, Val: "x"},
+	), testColumns, custom)
+
+	require.NoError(t, err)
+	sql := renderSelect(t, query)
+	assert.Contains(t, sql, `concat(p.first, p.last) ILIKE '%x%'`)
+	assert.Contains(t, sql, " OR ")
+}
+
+func TestApplyFilterCustomTakesPrecedence(t *testing.T) {
+	query := newSelect()
+	custom := map[string]FilterExpr{
+		"email": func(f Filter) (string, []any, error) {
+			return "custom_email(?)", []any{f.Val}, nil
+		},
+	}
+
+	err := ApplyFilter(query, Filter{Col: "email", Op: FilterOpExact, Val: "kit"}, testColumns, custom)
+
+	require.NoError(t, err)
+	sql := renderSelect(t, query)
+	assert.Contains(t, sql, `custom_email('kit')`)
+	assert.NotContains(t, sql, `"u"."email" =`)
+}
+
+func TestApplyFilterErrorFromNestedLeaf(t *testing.T) {
+	query := newSelect()
+
+	err := ApplyFilter(query, andGroup(
+		Filter{Col: "email", Op: FilterOpExact, Val: "kit"},
+		orGroup(
+			Filter{Col: "missing", Op: FilterOpExact, Val: "x"},
+		),
+	), testColumns, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `invalid filter field "missing"`)
 }
 
-func TestApplyFiltersNullOps(t *testing.T) {
+func TestApplyFilterCustomExprError(t *testing.T) {
+	query := newSelect()
+	custom := map[string]FilterExpr{
+		"boom": func(f Filter) (string, []any, error) {
+			return "", nil, errors.New("orm: custom boom")
+		},
+	}
+
+	err := ApplyFilter(query, Filter{Col: "boom", Op: FilterOpExact, Val: "x"}, testColumns, custom)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "custom boom")
+}
+
+func TestApplyFilterReturnsInvalidField(t *testing.T) {
+	query := newSelect()
+
+	err := ApplyFilter(query, Filter{Col: "missing", Op: FilterOpExact, Val: "x"}, nil, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `invalid filter field "missing"`)
+}
+
+func TestApplyFilterNullOps(t *testing.T) {
 	tests := map[string]struct {
 		filter Filter
 		want   string
@@ -160,19 +303,17 @@ func TestApplyFiltersNullOps(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			query := bun.NewDB(nil, pgdialect.New()).NewSelect()
+			query := newSelect()
 
-			err := ApplyFilters(query, []Filter{tt.filter}, map[string]string{"deleted_at": "u.deleted_at"})
+			err := ApplyFilter(query, tt.filter, map[string]string{"deleted_at": "u.deleted_at"}, nil)
 
 			require.NoError(t, err)
-			sql, err := query.AppendQuery(query.DB().QueryGen(), nil)
-			require.NoError(t, err)
-			assert.Contains(t, string(sql), tt.want)
+			assert.Contains(t, renderSelect(t, query), tt.want)
 		})
 	}
 }
 
-func TestApplyFiltersReturnsInvalidVals(t *testing.T) {
+func TestApplyFilterReturnsInvalidVals(t *testing.T) {
 	tests := map[string]struct {
 		filter Filter
 		want   string
@@ -193,9 +334,9 @@ func TestApplyFiltersReturnsInvalidVals(t *testing.T) {
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			query := bun.NewDB(nil, pgdialect.New()).NewSelect()
+			query := newSelect()
 
-			err := ApplyFilters(query, []Filter{tt.filter}, map[string]string{"age": "u.age", "status": "u.status"})
+			err := ApplyFilter(query, tt.filter, map[string]string{"age": "u.age", "status": "u.status"}, nil)
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
@@ -203,24 +344,97 @@ func TestApplyFiltersReturnsInvalidVals(t *testing.T) {
 	}
 }
 
-func TestApplyFiltersReturnsInvalidOp(t *testing.T) {
-	query := bun.NewDB(nil, pgdialect.New()).NewSelect()
+func TestApplyFilterReturnsInvalidOp(t *testing.T) {
+	query := newSelect()
 
-	err := ApplyFilters(query, []Filter{{Col: "email", Op: "bad", Val: "x"}}, map[string]string{"email": "u.email"})
+	err := ApplyFilter(query, Filter{Col: "email", Op: "bad", Val: "x"}, map[string]string{"email": "u.email"}, nil)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `invalid filter op "bad"`)
 }
 
+func TestFilterFromProtoLeaf(t *testing.T) {
+	got := FilterFromProto(testProtoFilter{col: "email", op: testProtoFilterOpLike, val: "kit"})
+
+	assert.Equal(t, Filter{Col: "email", Op: FilterOpLike, Val: "kit", Logic: LogicalOpAnd}, got)
+}
+
+func TestFilterFromProtoRecursive(t *testing.T) {
+	got := FilterFromProto(testProtoFilter{
+		logic: testProtoLogicalOpAnd,
+		filters: []testProtoFilter{
+			{col: "age", op: testProtoFilterOpGTE, val: "18"},
+			{
+				logic: testProtoLogicalOpOr,
+				filters: []testProtoFilter{
+					{col: "status", op: testProtoFilterOpExact, val: "active"},
+					{col: "status", op: testProtoFilterOpExact, val: "pending"},
+				},
+			},
+		},
+	})
+
+	assert.Equal(t, Filter{
+		Logic: LogicalOpAnd,
+		Filters: []Filter{
+			{Col: "age", Op: FilterOpGTE, Val: "18", Logic: LogicalOpAnd},
+			{
+				Logic: LogicalOpOr,
+				Filters: []Filter{
+					{Col: "status", Op: FilterOpExact, Val: "active", Logic: LogicalOpAnd},
+					{Col: "status", Op: FilterOpExact, Val: "pending", Logic: LogicalOpAnd},
+				},
+			},
+		},
+	}, got)
+}
+
+func TestFilterFromProtoInList(t *testing.T) {
+	got := FilterFromProto(testProtoFilter{col: "status", op: testProtoFilterOpIn, vals: []string{"active", "pending"}})
+
+	assert.Equal(t, Filter{Col: "status", Op: FilterOpIn, Val: "", Vals: []any{"active", "pending"}, Logic: LogicalOpAnd}, got)
+}
+
+func TestFilterOpFromProto(t *testing.T) {
+	tests := map[string]struct {
+		op   testProtoFilterOp
+		want FilterOp
+	}{
+		"unspecified":       {op: testProtoFilterOpUnspecified, want: FilterOpExact},
+		"exact":             {op: testProtoFilterOpExact, want: FilterOpExact},
+		"like":              {op: testProtoFilterOpLike, want: FilterOpLike},
+		"gt":                {op: testProtoFilterOpGT, want: FilterOpGT},
+		"lt":                {op: testProtoFilterOpLT, want: FilterOpLT},
+		"gte":               {op: testProtoFilterOpGTE, want: FilterOpGTE},
+		"lte":               {op: testProtoFilterOpLTE, want: FilterOpLTE},
+		"null":              {op: testProtoFilterOpNull, want: FilterOpNull},
+		"not_null":          {op: testProtoFilterOpNotNull, want: FilterOpNotNull},
+		"like_ci":           {op: testProtoFilterOpLikeCI, want: FilterOpLikeCI},
+		"in":                {op: testProtoFilterOpIn, want: FilterOpIn},
+		"between":           {op: testProtoFilterOpBetween, want: FilterOpBetween},
+		"between_exclusive": {op: testProtoFilterOpBetweenExclusive, want: FilterOpBetweenExclusive},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tt.want, FilterOpFromProto(tt.op))
+		})
+	}
+}
+
+func TestLogicalOpFromProto(t *testing.T) {
+	assert.Equal(t, LogicalOpAnd, LogicalOpFromProto(testProtoLogicalOpUnspecified))
+	assert.Equal(t, LogicalOpAnd, LogicalOpFromProto(testProtoLogicalOpAnd))
+	assert.Equal(t, LogicalOpOr, LogicalOpFromProto(testProtoLogicalOpOr))
+}
+
 func TestApplyOrderBy(t *testing.T) {
-	query := bun.NewDB(nil, pgdialect.New()).NewSelect()
+	query := newSelect()
 
 	err := ApplyOrderBy(query, []OrderBy{{Col: "email", Order: OrderDirectionDesc}}, map[string]string{"email": "u.email"})
 
 	require.NoError(t, err)
-	sql, err := query.AppendQuery(query.DB().QueryGen(), nil)
-	require.NoError(t, err)
-	assert.Contains(t, string(sql), `ORDER BY "u"."email" DESC`)
+	assert.Contains(t, renderSelect(t, query), `ORDER BY "u"."email" DESC`)
 }
 
 func TestOrderByFromProto(t *testing.T) {
@@ -242,18 +456,16 @@ func TestOrderDirectionFromProto(t *testing.T) {
 }
 
 func TestApplyOrderByNoopWhenEmpty(t *testing.T) {
-	query := bun.NewDB(nil, pgdialect.New()).NewSelect()
+	query := newSelect()
 
 	err := ApplyOrderBy(query, nil, map[string]string{"email": "u.email"})
 
 	require.NoError(t, err)
-	sql, err := query.AppendQuery(query.DB().QueryGen(), nil)
-	require.NoError(t, err)
-	assert.NotContains(t, string(sql), "ORDER BY")
+	assert.NotContains(t, renderSelect(t, query), "ORDER BY")
 }
 
 func TestApplyOrderByReturnsInvalidField(t *testing.T) {
-	query := bun.NewDB(nil, pgdialect.New()).NewSelect()
+	query := newSelect()
 
 	err := ApplyOrderBy(query, []OrderBy{{Col: "missing", Order: OrderDirectionAsc}}, nil)
 
@@ -262,7 +474,7 @@ func TestApplyOrderByReturnsInvalidField(t *testing.T) {
 }
 
 func TestApplyOrderByReturnsInvalidDirection(t *testing.T) {
-	query := bun.NewDB(nil, pgdialect.New()).NewSelect()
+	query := newSelect()
 
 	err := ApplyOrderBy(query, []OrderBy{{Col: "email", Order: "bad"}}, map[string]string{"email": "u.email"})
 

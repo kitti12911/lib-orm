@@ -1,21 +1,23 @@
-// Command mapgen is the unified code generator for lib-orm consumers. It
-// bundles three subcommands that previously shipped as separate binaries:
+// Command mapgen is the unified, zero-config code generator for lib-orm
+// consumers. Every subcommand discovers its inputs by convention from the repo
+// root (-C, default "."); none takes a config file.
 //
-//	mapgen proto  -config protomapgen.yaml   # Go struct <-> proto mappers
-//	mapgen fields -root User -model-dir ...   # bun field/column maps
-//	mapgen patch  -config patchfields.yaml    # partial-update dispatchers
+//	mapgen map      # struct <-> proto mappers (+ enum bridges)
+//	mapgen fields   # bun field/column maps
+//	mapgen patch    # partial-update dispatchers (+ patchData structs)
+//	mapgen filter   # filter/order-by helpers (+ custom-filter registry)
 //
-// Each subcommand keeps its own flags and config schema; they share the AST,
-// naming, and file-writing helpers in internal/codegen.
+// They share the AST, naming, and file-writing helpers in internal/codegen.
 package main
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/kitti12911/lib-orm/v3/internal/fieldmap"
-	"github.com/kitti12911/lib-orm/v3/internal/patchfield"
-	"github.com/kitti12911/lib-orm/v3/internal/protomap"
+	"github.com/kitti12911/lib-orm/v4/internal/fieldmap"
+	"github.com/kitti12911/lib-orm/v4/internal/filtergen"
+	"github.com/kitti12911/lib-orm/v4/internal/mappergen"
+	"github.com/kitti12911/lib-orm/v4/internal/patchfield"
 )
 
 func main() {
@@ -32,12 +34,14 @@ func main() {
 		ok  = true
 	)
 	switch sub {
-	case "proto":
-		run = protomap.Run
+	case "map":
+		run = mappergen.Run
 	case "fields":
 		run = fieldmap.Run
 	case "patch":
 		run = patchfield.Run
+	case "filter":
+		run = filtergen.Run
 	default:
 		ok = false
 	}
@@ -57,9 +61,10 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: mapgen <subcommand> [flags]
 
-subcommands:
-  proto   generate Go struct <-> proto mapper functions (-config)
-  fields  generate bun field/column maps (-root, -model-dir, -out, -package)
-  patch   generate partial-update field dispatchers (-config)
+subcommands (all zero-config; -C sets the repo root):
+  map     generate Go struct <-> proto mapper functions + enum bridges
+  fields  generate bun field/column maps
+  patch   generate partial-update field dispatchers + patchData structs
+  filter  generate filter/order-by helpers + custom-filter registry
 `)
 }
