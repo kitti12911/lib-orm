@@ -7,8 +7,7 @@ shared Bun ORM helpers for homelab services.
 ```bash
 lib-orm/
 ├── cmd/
-│   ├── fieldmapgen/      # Bun model field-map generator
-│   └── patchfieldgen/    # field-mask patch extractor generator
+│   └── mapgen/           # code generator: fields, patch, and proto subcommands
 ├── orm.go                # database setup, migrations, fixtures
 ├── query.go              # filter, order, and patch query helpers
 ├── transaction.go        # context-aware transaction provider
@@ -216,11 +215,11 @@ if err := orm.ApplyPatchFields(query, fields, columns); err != nil {
 
 ### generators
 
-`fieldmapgen` generates Bun-aware field maps and validation helpers from model
-structs:
+`mapgen fields` generates Bun-aware field maps and validation helpers from
+model structs:
 
 ```bash
-go run github.com/kitti12911/lib-orm/v3/cmd/fieldmapgen@v2.2.0 \
+go run github.com/kitti12911/lib-orm/v3/cmd/mapgen@v3.5.0 fields \
     -model-dir internal/database \
     -root User \
     -out gen/database/fieldmap_generated.go \
@@ -239,73 +238,58 @@ Generated output gives you maps such as `UserRootFields`,
 helpers use these maps to validate filter, order, and patch field names before
 building SQL.
 
-`patchfieldgen` generates field-mask extraction code for PATCH handlers. It
-maps request paths into table-specific field buckets and can copy nested request
-values for create-if-missing flows:
+`mapgen patch` generates field-mask extraction code for PATCH handlers from a
+YAML config. It maps request paths into table-specific field buckets and can
+copy nested request values for create-if-missing flows:
 
 ```bash
-go run github.com/kitti12911/lib-orm/v3/cmd/patchfieldgen@v2.2.0 \
-    -file internal/feature/user/user.go \
-    -root CreateParams \
-    -out internal/feature/user/patch_generated.go \
-    -package user \
-    -fieldmap-import grpc-sandbox/gen/database \
-    -root-selector params.User \
-    -paths-selector params.Fields \
-    -bucket root:userFields:fieldmap.IsUserRootField \
-    -bucket profile:profileFields:fieldmap.IsUserProfileField \
-    -bucket profile.address:addressFields:fieldmap.IsUserAddressField \
-    -copy params.User.Profile:data.profile \
-    -copy params.User.Profile.Address:data.address:params.User.Profile
+go run github.com/kitti12911/lib-orm/v3/cmd/mapgen@v3.5.0 patch \
+    -config internal/feature/user/patchfields.yaml
 ```
 
-Flag guide:
+Config guide:
 
-- `-file`: Go source file containing the patch input structs.
-- `-root`: root struct type to inspect. In `grpc-sandbox`, this is
+- `file`: Go source file containing the patch input structs.
+- `root`: root struct type to inspect. In `grpc-sandbox`, this is
   `CreateParams` because PATCH accepts the same editable user shape.
-- `-out`: generated output file.
-- `-package`: package name for the generated file.
-- `-fieldmap-import`: import path for generated field-map validators.
-- `-root-selector`: selector for the request data inside the generated
+- `out`: generated output file.
+- `package`: package name for the generated file.
+- `fieldmap_import`: import path for generated field-map validators.
+- `root_selector`: selector for the request data inside the generated
   function. If the generated function is `patchFields(params PatchParams)` and
   values live at `params.User`, use `params.User`.
-- `-paths-selector`: selector for field mask paths. In `grpc-sandbox`, this is
+- `paths_selector`: selector for field mask paths. In `grpc-sandbox`, this is
   `params.Fields`.
-- `-bucket`: route field mask paths into table-specific output maps.
-- `-copy`: copy nested pointer values from the request into patch data.
+- `buckets`: route field mask paths into table-specific output maps.
+- `copies`: copy nested pointer values from the request into patch data.
 
 Bucket format:
 
-```text
-path_prefix:output_map:validator_func
-```
-
-Example:
-
-```bash
--bucket profile.address:addressFields:fieldmap.IsUserAddressField
+```yaml
+buckets:
+    - path: profile.address
+      map_field: addressFields
 ```
 
 This means paths like `profile.address.city` go into `data.addressFields`, and
-the final key `city` must pass `fieldmap.IsUserAddressField("city")`.
+the generated dispatcher trims the `profile.address.` prefix before storing the
+final key `city`.
 
-Use `root` as the prefix for top-level fields:
+Omit `path` for top-level fields:
 
-```bash
--bucket root:userFields:fieldmap.IsUserRootField
+```yaml
+buckets:
+    - map_field: userFields
 ```
 
 Copy format:
 
-```text
-source_pointer:target_value[:guard_pointer,guard_pointer]
-```
-
-Example:
-
-```bash
--copy params.User.Profile.Address:data.address:params.User.Profile
+```yaml
+copies:
+    - source: params.User.Profile.Address
+      target: data.address
+      guards:
+          - params.User.Profile
 ```
 
 This generates a guarded copy:
@@ -316,9 +300,24 @@ if params.User.Profile != nil && params.User.Profile.Address != nil {
 }
 ```
 
-Use `-copy` when service code may need the full nested value, usually to create
+Use `copies` when service code may need the full nested value, usually to create
 a missing child row before applying PATCH field updates. Buckets are for SQL
 field maps; copies are for carrying nested create data.
+
+`mapgen proto` generates one-to-one mapping functions between Go structs and
+protobuf messages. It handles Bun models and plain service-layer structs, can
+emit only `to_proto`, only `from_proto`, or both directions, and can merge
+multiple targets into one output file:
+
+```bash
+go run github.com/kitti12911/lib-orm/v3/cmd/mapgen@v3.5.0 proto \
+    -config protomapgen.yaml
+```
+
+Use `converters:` for enum, relation, or custom-type bridges, `exclude:` for
+fields without a proto counterpart, `target_pointer: false` for value-returning
+parameter structs, and `unwrap:` when a request message wraps the payload in a
+nested field.
 
 ## prerequisites
 

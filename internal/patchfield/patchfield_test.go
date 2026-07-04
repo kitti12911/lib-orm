@@ -1,12 +1,11 @@
-package main
+package patchfield
 
 import (
-	"bytes"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,6 +13,42 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRenderSourceEmitsSetClauses(t *testing.T) {
+	spec := generateSpec{
+		packageName:   "part",
+		functionName:  "patchFields",
+		paramType:     "PatchParams",
+		dataType:      "patchData",
+		pathsSelector: "params.Fields",
+		buckets:       []bucket{{prefix: "", mapField: "partFields"}},
+		setClauses: &setClausesSpec{
+			funcName:  "partPatchSetClauses",
+			bitFunc:   "database.Bit",
+			bitImport: "example.com/svc/internal/database",
+			cols: []setCol{
+				{column: "code"},
+				{column: "is_active", isBool: true},
+			},
+		},
+	}
+
+	src := renderSource(spec, nil)
+	if _, err := format.Source(src); err != nil {
+		t.Fatalf("generated source does not gofmt: %v\n%s", err, src)
+	}
+	out := string(src)
+
+	assert.Contains(t, out, `"fmt"`)
+	assert.Contains(t, out, `"sort"`)
+	assert.Contains(t, out, `"example.com/svc/internal/database"`)
+	assert.Contains(t, out, "func partPatchSetClauses(fields map[string]any) (setClauses []string, args []any, err error) {")
+	assert.Contains(t, out, `setClauses = append(setClauses, "[code] = ?")`)
+	// bool column routes through the configured bit conversion.
+	assert.Contains(t, out, "if b, ok := value.(bool); ok {")
+	assert.Contains(t, out, "value = database.Bit(b)")
+	assert.Contains(t, out, `return nil, nil, fmt.Errorf("orm: invalid patch field %q", field)`)
+}
 
 func TestCollectFieldsUsesConfiguredSelectorsAndBuckets(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "params.go")
@@ -253,7 +288,7 @@ targets:
         map_field: addressFields
 `), 0o600))
 
-	require.NoError(t, run([]string{"-config", configPath}))
+	require.NoError(t, Run([]string{"-config", configPath}))
 
 	data, err := os.ReadFile(out)
 	require.NoError(t, err)
@@ -307,7 +342,7 @@ targets:
       - map_field: rootFields              # omitting "path" is equivalent to ""
 `), 0o600))
 
-	require.NoError(t, run([]string{"-config", configPath}))
+	require.NoError(t, Run([]string{"-config", configPath}))
 
 	dataA, err := os.ReadFile(outA)
 	require.NoError(t, err)
@@ -366,7 +401,7 @@ targets:
           - params.Payload.Profile
 `), 0o600))
 
-	require.NoError(t, run([]string{"-config", configPath}))
+	require.NoError(t, Run([]string{"-config", configPath}))
 
 	data, err := os.ReadFile(out)
 	require.NoError(t, err)
@@ -452,7 +487,7 @@ targets:
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := run(tt.args)
+			err := Run(tt.args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
 		})
@@ -460,13 +495,13 @@ targets:
 }
 
 func TestRunRequiresConfigFlag(t *testing.T) {
-	err := run(nil)
+	err := Run(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "-config is required")
 }
 
 func TestRunFlagParseError(t *testing.T) {
-	err := run([]string{"-not-a-flag"})
+	err := Run([]string{"-not-a-flag"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "flag provided but not defined")
 }
@@ -492,7 +527,7 @@ func TestRunParseModelError(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "missing.go")
 	configPath := writeYAMLConfig(t, src, filepath.Join(t.TempDir(), "out.go"))
 
-	err := run([]string{"-config", configPath})
+	err := Run([]string{"-config", configPath})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse model file")
 }
@@ -516,7 +551,7 @@ targets:
       - map_field: rootFields
 `), 0o600))
 
-	err := run([]string{"-config", configPath})
+	err := Run([]string{"-config", configPath})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "format generated source")
 }
@@ -532,46 +567,9 @@ type PatchBody struct { Email string `+"`field:\"email\"`"+` }
 	out := filepath.Join(blocker, "sub", "out.go")
 	configPath := writeYAMLConfig(t, src, out)
 
-	err := run([]string{"-config", configPath})
+	err := Run([]string{"-config", configPath})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mkdir")
-}
-
-func TestMainExitsOnError(t *testing.T) {
-	if os.Getenv("PATCHFIELDGEN_TEST_MAIN") == "1" {
-		os.Args = []string{"patchfieldgen"}
-		main()
-		return
-	}
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestMainExitsOnError") //nolint:gosec // os.Args[0] is the test binary path
-	cmd.Env = append(os.Environ(), "PATCHFIELDGEN_TEST_MAIN=1")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-
-	var exitErr *exec.ExitError
-	require.ErrorAs(t, err, &exitErr)
-	assert.Equal(t, 1, exitErr.ExitCode())
-	assert.Contains(t, stderr.String(), "patchfieldgen:")
-}
-
-func TestWriteFileAtomic(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "out.txt")
-	require.NoError(t, writeFileAtomic(path, []byte("hello")))
-
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, "hello", string(data))
-
-	require.NoError(t, writeFileAtomic(path, []byte("world")))
-	data, err = os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, "world", string(data))
-}
-
-func TestWriteFileAtomicMissingDir(t *testing.T) {
-	err := writeFileAtomic(filepath.Join(t.TempDir(), "nope", "out.txt"), []byte("x"))
-	require.Error(t, err)
 }
 
 func writePatchFieldFile(t *testing.T, path, content string) {

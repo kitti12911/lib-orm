@@ -1,4 +1,4 @@
-package main
+package fieldmap
 
 import (
 	"bytes"
@@ -6,43 +6,28 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/kitti12911/lib-orm/v3/internal/codegen"
 )
 
-func TestSnake(t *testing.T) {
-	tests := map[string]string{
-		"UserID":    "user_id",
-		"HTTPSPort": "https_port",
-		"URLValue":  "url_value",
-		"Line1":     "line1",
-	}
-
-	for input, want := range tests {
-		t.Run(input, func(t *testing.T) {
-			assert.Equal(t, want, snake(input))
-		})
-	}
-}
-
-func TestIsChildRelation(t *testing.T) {
+func TestIsWalkableRelation(t *testing.T) {
 	tests := map[string]bool{
 		"rel:has-one,join:id=user_id":        true,
 		"rel:has-many,join:id=user_id":       true,
-		"rel:belongs-to,join:user_id=id":     false,
-		"rel:many-to-many,join:user_id=id":   false,
+		"rel:belongs-to,join:user_id=id":     true,
+		"rel:many-to-many,join:user_id=id":   true,
 		"column_name,type:uuid,default:null": false,
 	}
 
 	for tag, want := range tests {
 		t.Run(tag, func(t *testing.T) {
-			assert.Equal(t, want, isChildRelation(tag))
+			assert.Equal(t, want, isWalkableRelation(tag))
 		})
 	}
 }
@@ -66,6 +51,7 @@ type User struct {
 	ID string `+"`bun:\"id,pk\"`"+`
 	UserName string `+"`bun:\"username\"`"+`
 	Profile *UserProfile `+"`bun:\"rel:has-one,join:id=user_id\"`"+`
+	Department *Department `+"`bun:\"rel:belongs-to,join:dept_id=id\"`"+`
 	Owner *User `+"`bun:\"rel:belongs-to,join:owner_id=id\"`"+`
 }
 
@@ -74,13 +60,19 @@ type UserProfile struct {
 	ID string `+"`bun:\"id,pk\"`"+`
 	UserID string `+"`bun:\"user_id\"`"+`
 }
+
+type Department struct {
+	bun.BaseModel `+"`bun:\"table:departments,alias:d\"`"+`
+	ID string `+"`bun:\"id,pk\"`"+`
+	Name string `+"`bun:\"name\"`"+`
+}
 `)
 	writeFile(t, filepath.Join(dir, "model_test.go"), `package database`)
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "nested"), 0o755))
 
 	models, err := parseModelDir(dir)
 	require.NoError(t, err)
-	require.Len(t, models, 2)
+	require.Len(t, models, 3)
 	assert.Equal(t, "users", models["User"].table)
 	assert.Equal(t, "u", models["User"].alias)
 	assert.Equal(t, "username", models["User"].columns["user_name"])
@@ -89,6 +81,10 @@ type UserProfile struct {
 	visit(models, models["User"], rootNestedName, maps, map[string]bool{})
 	assert.Contains(t, maps, rootNestedName)
 	assert.Contains(t, maps, "profile")
+	// belongs-to to a distinct model is now walked (relational filter columns).
+	assert.Contains(t, maps, "department")
+	assert.Equal(t, "department", maps["department"].alias)
+	// the self-referential Owner belongs-to is cut off by the seen guard.
 	assert.NotContains(t, maps, "owner")
 }
 
@@ -98,15 +94,15 @@ func TestVisitSkipsSeenAndMissingRelationModels(t *testing.T) {
 			name:    "User",
 			columns: map[string]string{"id": "id"},
 			relations: []relation{
-				{name: "Profile", model: "Profile", child: true},
-				{name: "Missing", model: "Missing", child: true},
+				{name: "Profile", model: "Profile", walk: true},
+				{name: "Missing", model: "Missing", walk: true},
 			},
 		},
 		"Profile": {
 			name:    "Profile",
 			columns: map[string]string{"user_id": "user_id"},
 			relations: []relation{
-				{name: "Address", model: "Address", child: true},
+				{name: "Address", model: "Address", walk: true},
 			},
 		},
 		"Address": {
@@ -201,7 +197,7 @@ type User struct {
 func TestStructTagAndTagOptionValue(t *testing.T) {
 	file := parseSource(t, `package p; type T struct { Name string `+"`bun:\"name,type:text\"`"+` }`)
 	field := file.Decls[0].(*ast.GenDecl).Specs[0].(*ast.TypeSpec).Type.(*ast.StructType).Fields.List[0]
-	assert.Equal(t, "name,type:text", structTag(field).Get("bun"))
+	assert.Equal(t, "name,type:text", codegen.StructTag(field).Get("bun"))
 	assert.Equal(t, "users", tagOptionValue("table:users,alias:u", "table"))
 	assert.Empty(t, tagOptionValue("alias:u", "table"))
 }
@@ -266,11 +262,6 @@ func TestQueryAlias(t *testing.T) {
 	assert.Equal(t, "profile__address", queryAlias(model{alias: "ua"}, "profile.address"))
 }
 
-func TestStructTagWithoutTag(t *testing.T) {
-	tag := structTag(&ast.Field{})
-	assert.Equal(t, reflect.StructTag(""), tag)
-}
-
 func TestRunGeneratesOutput(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "model.go"), `
@@ -286,7 +277,7 @@ type User struct {
 `)
 	out := filepath.Join(t.TempDir(), "out", "fieldmap_generated.go")
 
-	err := run([]string{
+	err := Run([]string{
 		"-model-dir", dir,
 		"-out", out,
 		"-package", "database",
@@ -336,7 +327,7 @@ func TestRunErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := run(tt.args)
+			err := Run(tt.args)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
 		})
@@ -355,7 +346,7 @@ type User struct {
 	ID string `+"`bun:\"id,pk\"`"+`
 }
 `)
-	err := run([]string{
+	err := Run([]string{
 		"-model-dir", dir,
 		"-out", filepath.Join(t.TempDir(), "out.go"),
 		"-package", "1invalid",
@@ -380,7 +371,7 @@ type User struct {
 	blocker := filepath.Join(t.TempDir(), "blocker")
 	require.NoError(t, os.WriteFile(blocker, []byte{}, 0o600))
 
-	err := run([]string{
+	err := Run([]string{
 		"-model-dir", dir,
 		"-out", filepath.Join(blocker, "sub", "out.go"),
 		"-package", "database",
@@ -388,44 +379,6 @@ type User struct {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mkdir")
-}
-
-func TestMainExitsOnError(t *testing.T) {
-	if os.Getenv("FIELDMAPGEN_TEST_MAIN") == "1" {
-		os.Args = []string{"fieldmapgen"}
-		main()
-		return
-	}
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestMainExitsOnError") //nolint:gosec // os.Args[0] is the test binary path
-	cmd.Env = append(os.Environ(), "FIELDMAPGEN_TEST_MAIN=1")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-
-	var exitErr *exec.ExitError
-	require.ErrorAs(t, err, &exitErr)
-	assert.Equal(t, 1, exitErr.ExitCode())
-	assert.Contains(t, stderr.String(), "fieldmapgen:")
-}
-
-func TestWriteFileAtomic(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "out.txt")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, writeFileAtomic(path, []byte("hello")))
-
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, "hello", string(data))
-
-	require.NoError(t, writeFileAtomic(path, []byte("world")))
-	data, err = os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, "world", string(data))
-}
-
-func TestWriteFileAtomicMissingDir(t *testing.T) {
-	err := writeFileAtomic(filepath.Join(t.TempDir(), "nope", "out.txt"), []byte("x"))
-	require.Error(t, err)
 }
 
 func parseSource(t *testing.T, src string) *ast.File {

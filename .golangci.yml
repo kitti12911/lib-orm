@@ -115,9 +115,6 @@ linters:
                   - errcheck
                   - godot
                   - wrapcheck
-            - path: ^cmd/patchfieldgen/main\.go$
-              linters:
-                  - cyclop
 
 formatters:
     enable:

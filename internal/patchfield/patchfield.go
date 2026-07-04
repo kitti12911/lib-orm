@@ -1,11 +1,12 @@
-// Command patchfieldgen generates per-field patch dispatchers for partial-update
-// handlers. Given a Go struct describing the patch payload and a set of buckets
-// that group fields by their destination map, it emits a function that walks
-// the requested field paths and copies each value into the right bucket map.
+// Package patchfield implements the "mapgen patch" subcommand: it generates
+// per-field patch dispatchers for partial-update handlers. Given a Go struct
+// describing the patch payload and a set of buckets that group fields by their
+// destination map, it emits a function that walks the requested field paths and
+// copies each value into the right bucket map.
 //
 // Configuration is supplied via a YAML file:
 //
-//	patchfieldgen -config patchfields.yaml
+//	mapgen patch -config patchfields.yaml
 //
 // A single config file can describe many targets, each producing one output
 // file. Top-level keys (function, param_type, data_type) act as defaults
@@ -21,7 +22,7 @@
 // flags and emitted a per-field validator call. Both are gone; pinning to a
 // previous generator release keeps old invocations working, but upgrading
 // requires switching to a YAML config and regenerating the output file.
-package main
+package patchfield
 
 import (
 	"bytes"
@@ -39,6 +40,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/kitti12911/lib-orm/v3/internal/codegen"
 )
 
 // field is the fully-resolved info needed to emit one `case` clause: which
@@ -95,6 +98,22 @@ type generateSpec struct {
 	pathsSelector string
 	buckets       []bucket
 	copyRules     []copyRule
+	setClauses    *setClausesSpec
+}
+
+// setClausesSpec is the resolved set_clauses config. cols is populated in
+// generate() once the root struct has been parsed.
+type setClausesSpec struct {
+	funcName  string
+	bitFunc   string
+	bitImport string
+	cols      []setCol
+}
+
+// setCol is one column emitted in the SET-clause switch.
+type setCol struct {
+	column string // snake column name (the field tag)
+	isBool bool   // bool fields get the bit conversion
 }
 
 // yamlConfig mirrors the on-disk YAML schema. Top-level keys provide defaults
@@ -108,17 +127,29 @@ type yamlConfig struct {
 }
 
 type yamlTarget struct {
-	File          string       `yaml:"file"`
-	Root          string       `yaml:"root"`
-	Out           string       `yaml:"out"`
-	Package       string       `yaml:"package"`
-	Function      string       `yaml:"function"`
-	ParamType     string       `yaml:"param_type"`
-	DataType      string       `yaml:"data_type"`
-	RootSelector  string       `yaml:"root_selector"`
-	PathsSelector string       `yaml:"paths_selector"`
-	Buckets       []yamlBucket `yaml:"buckets"`
-	Copies        []yamlCopy   `yaml:"copies"`
+	File          string          `yaml:"file"`
+	Root          string          `yaml:"root"`
+	Out           string          `yaml:"out"`
+	Package       string          `yaml:"package"`
+	Function      string          `yaml:"function"`
+	ParamType     string          `yaml:"param_type"`
+	DataType      string          `yaml:"data_type"`
+	RootSelector  string          `yaml:"root_selector"`
+	PathsSelector string          `yaml:"paths_selector"`
+	Buckets       []yamlBucket    `yaml:"buckets"`
+	Copies        []yamlCopy      `yaml:"copies"`
+	SetClauses    *yamlSetClauses `yaml:"set_clauses"`
+}
+
+// yamlSetClauses, when present, asks the generator to additionally emit a
+// raw-SQL SET-clause builder for the root struct's columns (used by
+// repositories that issue raw UPDATEs instead of the ORM query builder).
+type yamlSetClauses struct {
+	Func string `yaml:"func"`
+	// BitFunc converts bool fields before binding (e.g. database.Bit); empty
+	// means bools bind as-is. BitImport is its package import path.
+	BitFunc   string `yaml:"bit_func"`
+	BitImport string `yaml:"bit_import"`
 }
 
 type yamlBucket struct {
@@ -134,17 +165,10 @@ type yamlCopy struct {
 	Guards []string `yaml:"guards"`
 }
 
-func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "patchfieldgen: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// run is the testable entrypoint. It parses the -config flag and runs the
-// generation pipeline once per target listed in the YAML config.
-func run(args []string) error {
-	fs := flag.NewFlagSet("patchfieldgen", flag.ContinueOnError)
+// Run parses the -config flag and runs the generation pipeline once per target
+// listed in the YAML config.
+func Run(args []string) error {
+	fs := flag.NewFlagSet("mapgen patch", flag.ContinueOnError)
 	configPath := fs.String("config", "", "Path to a YAML config file describing one or more generation targets")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parse flags: %w", err)
@@ -196,6 +220,57 @@ func specsFromConfig(path string) ([]generateSpec, error) {
 	return specs, nil
 }
 
+// resolveBuckets validates the bucket list and sorts it so the longest path
+// prefix wins during lookup, routing nested paths to the most specific bucket.
+func resolveBuckets(in []yamlBucket) ([]bucket, error) {
+	buckets := make([]bucket, 0, len(in))
+	for _, b := range in {
+		if b.MapField == "" {
+			return nil, fmt.Errorf("bucket %q: map_field is required", b.Path)
+		}
+		buckets = append(buckets, bucket{prefix: b.Path, mapField: b.MapField})
+	}
+	sort.SliceStable(buckets, func(i, j int) bool {
+		return len(buckets[i].prefix) > len(buckets[j].prefix)
+	})
+	return buckets, nil
+}
+
+// resolveCopyRules validates the guarded-copy rules emitted before the path switch.
+func resolveCopyRules(in []yamlCopy) ([]copyRule, error) {
+	out := make([]copyRule, 0, len(in))
+	for _, c := range in {
+		if c.Source == "" || c.Target == "" {
+			return nil, errors.New("copy rule: source and target are required")
+		}
+		out = append(out, copyRule{
+			source: c.Source,
+			target: c.Target,
+			guards: append([]string(nil), c.Guards...),
+		})
+	}
+	return out, nil
+}
+
+// resolveSetClauses validates and resolves the optional set_clauses block. The
+// column list is filled later in generate() once the root struct is parsed.
+func resolveSetClauses(in *yamlSetClauses) (*setClausesSpec, error) {
+	if in == nil {
+		return nil, nil
+	}
+	if in.Func == "" {
+		return nil, errors.New("set_clauses: func is required")
+	}
+	if in.BitFunc != "" && in.BitImport == "" {
+		return nil, errors.New("set_clauses: bit_import is required when bit_func is set")
+	}
+	return &setClausesSpec{
+		funcName:  in.Func,
+		bitFunc:   in.BitFunc,
+		bitImport: in.BitImport,
+	}, nil
+}
+
 // specFromTarget resolves a yamlTarget into a generateSpec, inheriting defaults
 // from the surrounding yamlConfig and applying built-in defaults for the
 // optional string fields.
@@ -214,31 +289,19 @@ func specFromTarget(cfg yamlConfig, t yamlTarget) (generateSpec, error) {
 		return generateSpec{}, errors.New("file, root, out, package, root_selector, paths_selector, and buckets are required")
 	}
 
-	buckets := make([]bucket, 0, len(t.Buckets))
-	for _, b := range t.Buckets {
-		if b.MapField == "" {
-			return generateSpec{}, fmt.Errorf("bucket %q: map_field is required", b.Path)
-		}
-		buckets = append(buckets, bucket{
-			prefix:   b.Path,
-			mapField: b.MapField,
-		})
+	buckets, err := resolveBuckets(t.Buckets)
+	if err != nil {
+		return generateSpec{}, err
 	}
-	// Longest prefix wins during bucket lookup so nested paths route correctly.
-	sort.SliceStable(buckets, func(i, j int) bool {
-		return len(buckets[i].prefix) > len(buckets[j].prefix)
-	})
 
-	copyRules := make([]copyRule, 0, len(t.Copies))
-	for _, c := range t.Copies {
-		if c.Source == "" || c.Target == "" {
-			return generateSpec{}, errors.New("copy rule: source and target are required")
-		}
-		copyRules = append(copyRules, copyRule{
-			source: c.Source,
-			target: c.Target,
-			guards: append([]string(nil), c.Guards...),
-		})
+	copyRules, err := resolveCopyRules(t.Copies)
+	if err != nil {
+		return generateSpec{}, err
+	}
+
+	setClauses, err := resolveSetClauses(t.SetClauses)
+	if err != nil {
+		return generateSpec{}, err
 	}
 
 	return generateSpec{
@@ -253,6 +316,7 @@ func specFromTarget(cfg yamlConfig, t yamlTarget) (generateSpec, error) {
 		pathsSelector: t.PathsSelector,
 		buckets:       buckets,
 		copyRules:     copyRules,
+		setClauses:    setClauses,
 	}, nil
 }
 
@@ -270,6 +334,19 @@ func generate(spec generateSpec) error {
 		return fields[i].path < fields[j].path
 	})
 
+	if spec.setClauses != nil {
+		root, ok := models[spec.root]
+		if !ok {
+			return fmt.Errorf("set_clauses: root %q not found", spec.root)
+		}
+		for _, mf := range root.fields {
+			spec.setClauses.cols = append(spec.setClauses.cols, setCol{
+				column: mf.tag,
+				isBool: mf.typeName == "bool",
+			})
+		}
+	}
+
 	src := renderSource(spec, fields)
 	out, err := format.Source(src)
 	if err != nil {
@@ -278,7 +355,7 @@ func generate(spec generateSpec) error {
 	if err := os.MkdirAll(filepath.Dir(spec.out), 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-	if err := writeFileAtomic(spec.out, out); err != nil {
+	if err := codegen.WriteFileAtomic(spec.out, out); err != nil {
 		return fmt.Errorf("write output: %w", err)
 	}
 	return nil
@@ -293,8 +370,11 @@ func generate(spec generateSpec) error {
 // source struct.
 func renderSource(spec generateSpec, fields []field) []byte {
 	var buf bytes.Buffer
-	buf.WriteString("// Code generated by patchfieldgen; DO NOT EDIT.\n\n")
+	buf.WriteString("// Code generated by mapgen patch; DO NOT EDIT.\n\n")
 	fmt.Fprintf(&buf, "package %s\n\n", spec.packageName)
+	if spec.setClauses != nil {
+		writeSetClauseImports(&buf, *spec.setClauses)
+	}
 	fmt.Fprintf(&buf, "func %s(params %s) %s {\n", spec.functionName, spec.paramType, spec.dataType)
 
 	// Pre-allocate one map per bucket so the switch can index without checks.
@@ -334,7 +414,54 @@ func renderSource(spec generateSpec, fields []field) []byte {
 	buf.WriteString("\t}\n\n")
 	buf.WriteString("\treturn data\n")
 	buf.WriteString("}\n")
+	if spec.setClauses != nil {
+		writeSetClauses(&buf, *spec.setClauses)
+	}
 	return buf.Bytes()
+}
+
+// writeSetClauseImports emits the import block the SET-clause builder needs:
+// fmt and sort always, plus the bit-conversion package when configured.
+func writeSetClauseImports(buf *bytes.Buffer, sc setClausesSpec) {
+	buf.WriteString("import (\n")
+	buf.WriteString("\t\"fmt\"\n")
+	buf.WriteString("\t\"sort\"\n")
+	if sc.bitImport != "" {
+		fmt.Fprintf(buf, "\n\t%q\n", sc.bitImport)
+	}
+	buf.WriteString(")\n\n")
+}
+
+// writeSetClauses emits a raw-SQL SET-clause builder: it sorts the requested
+// field keys, then per known column appends a bracketed "[col] = ?" clause and
+// its bound value, converting bool columns through the configured bit func.
+// Unknown fields are rejected.
+func writeSetClauses(buf *bytes.Buffer, sc setClausesSpec) {
+	fmt.Fprintf(buf, "\nfunc %s(fields map[string]any) (setClauses []string, args []any, err error) {\n", sc.funcName)
+	buf.WriteString("\tkeys := make([]string, 0, len(fields))\n")
+	buf.WriteString("\tfor field := range fields {\n\t\tkeys = append(keys, field)\n\t}\n")
+	buf.WriteString("\tsort.Strings(keys)\n\n")
+	buf.WriteString("\tsetClauses = make([]string, 0, len(keys))\n")
+	buf.WriteString("\targs = make([]any, 0, len(keys))\n")
+	buf.WriteString("\tfor _, field := range keys {\n")
+	buf.WriteString("\t\tvalue := fields[field]\n")
+	buf.WriteString("\t\tswitch field {\n")
+	for _, c := range sc.cols {
+		fmt.Fprintf(buf, "\t\tcase %q:\n", c.column)
+		if c.isBool && sc.bitFunc != "" {
+			buf.WriteString("\t\t\tif b, ok := value.(bool); ok {\n")
+			fmt.Fprintf(buf, "\t\t\t\tvalue = %s(b)\n", sc.bitFunc)
+			buf.WriteString("\t\t\t}\n")
+		}
+		buf.WriteString("\t\t\targs = append(args, value)\n")
+		fmt.Fprintf(buf, "\t\t\tsetClauses = append(setClauses, %q)\n", "["+c.column+"] = ?")
+	}
+	buf.WriteString("\t\tdefault:\n")
+	buf.WriteString("\t\t\treturn nil, nil, fmt.Errorf(\"orm: invalid patch field %q\", field)\n")
+	buf.WriteString("\t\t}\n")
+	buf.WriteString("\t}\n\n")
+	buf.WriteString("\treturn setClauses, args, nil\n")
+	buf.WriteString("}\n")
 }
 
 // combinedNilGuard joins a chain of pointer ancestors into a single boolean
@@ -350,35 +477,6 @@ func combinedNilGuard(guards []string) string {
 		parts[i] = g + " == nil"
 	}
 	return strings.Join(parts, " || ")
-}
-
-// writeFileAtomic writes data to path by first writing to a temp file in the
-// same directory and renaming on success, so a failed write never leaves a
-// partial file at path. The output file mode is 0o644.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".patchfieldgen-*")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) //nolint:errcheck // best-effort cleanup; rename removes the file on success
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close() //nolint:errcheck // already failing
-		return fmt.Errorf("write temp file: %w", err)
-	}
-	if err := tmp.Chmod(0o644); err != nil {
-		tmp.Close() //nolint:errcheck // already failing
-		return fmt.Errorf("chmod temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename temp file: %w", err)
-	}
-	return nil
 }
 
 // parseModels parses path with go/parser and returns every top-level struct
