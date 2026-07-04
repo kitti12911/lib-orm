@@ -41,10 +41,6 @@ same commands with workflow-specific orchestration around them.
 GitHub Actions uses `TOOLCHAIN_REGISTRY` and `TOOLCHAIN_IMAGE_NAMESPACE` to
 resolve the shared Zot toolchain images.
 
-`GO_TEST_RACE=true` or `GO_TEST_CGO=true` requires a C compiler in the selected
-toolchain image. `lib-orm` sets `GO_TEST_RACE=false` in GitHub Actions while
-using `image-toolchain` v1.1.0 because that image does not include one.
-
 ## packages
 
 ### orm
