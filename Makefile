@@ -4,17 +4,11 @@ tidy:
 
 lint: vet golangci-lint markdownlint
 
-ci-lint:
-	./scripts/ci/go-lint.sh
-
 ci-test:
 	./scripts/ci/go-test.sh
 
 ci-security:
 	./scripts/ci/security-scan.sh
-
-ci-supply-chain:
-	./scripts/ci/supply-chain-scan.sh
 
 ci-markdownlint:
 	./scripts/ci/markdownlint.sh
