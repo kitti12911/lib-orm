@@ -28,3 +28,11 @@ func TestWriteFileAtomicMissingDir(t *testing.T) {
 	err := WriteFileAtomic(filepath.Join(t.TempDir(), "nope", "out.txt"), []byte("x"))
 	require.Error(t, err)
 }
+
+func TestWriteFileAtomicRenameError(t *testing.T) {
+	// path is an existing directory, so renaming the temp file over it fails.
+	dir := filepath.Join(t.TempDir(), "target-dir")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	err := WriteFileAtomic(dir, []byte("x"))
+	require.Error(t, err)
+}

@@ -1,6 +1,7 @@
 package filtergen
 
 import (
+	"go/parser"
 	"os"
 	"path/filepath"
 	"testing"
@@ -175,4 +176,22 @@ func TestRunErrors(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "internal", "database", "m.go"), []byte("package database\n"), 0o600))
 		assert.Error(t, Run([]string{"-C", dir}))
 	})
+}
+
+func TestRelationModel(t *testing.T) {
+	cases := map[string]string{
+		"Foo":            "Foo", // ident
+		"*Foo":           "Foo", // pointer -> ident
+		"[]Foo":          "Foo", // slice -> ident
+		"[]*Foo":         "Foo", // slice -> pointer -> ident
+		"pkg.Foo":        "Foo", // selector
+		"*pkg.Foo":       "Foo", // pointer -> selector
+		"map[string]Foo": "",    // unsupported type -> empty
+		"42":             "",    // literal -> empty
+	}
+	for src, want := range cases {
+		expr, err := parser.ParseExpr(src)
+		require.NoError(t, err)
+		assert.Equal(t, want, relationModel(expr), "expr %q", src)
+	}
 }

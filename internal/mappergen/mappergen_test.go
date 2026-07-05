@@ -219,3 +219,24 @@ func TestRunErrors(t *testing.T) {
 		assert.Error(t, Run([]string{"-C", dir}))
 	})
 }
+
+func TestDiscoverFromTargetsWithoutRootParams(t *testing.T) {
+	// Only a nested Create*Params exists; the root CreateParams (which would map
+	// to the root message) is absent, so discoverFromTargets takes the
+	// rootParams == "" branch and returns the collected targets sorted.
+	b := &builder{
+		messages: map[string]goStruct{
+			"User":        {},
+			"UserProfile": {},
+		},
+	}
+	params := map[string]goStruct{
+		"CreateProfileParams": {}, // -> "User"+"Profile" = "UserProfile", not the root
+	}
+
+	got := b.discoverFromTargets(params, "User")
+	require.Len(t, got, 1)
+	assert.Equal(t, "CreateProfileParams", got[0].goType)
+	assert.Equal(t, "UserProfile", got[0].protoType)
+	assert.False(t, got[0].valueRet)
+}
