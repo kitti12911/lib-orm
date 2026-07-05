@@ -2,7 +2,7 @@
 // consumers. Every subcommand discovers its inputs by convention from the repo
 // root (-C, default "."); none takes a config file.
 //
-//	mapgen map      # struct <-> proto mappers (+ enum bridges)
+//	mapgen map      # struct <-> proto mappers (+ enum bridges + model constructors)
 //	mapgen fields   # bun field/column maps
 //	mapgen patch    # partial-update dispatchers (+ patchData structs)
 //	mapgen filter   # filter/order-by helpers (+ custom-filter registry)
@@ -62,7 +62,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage: mapgen <subcommand> [flags]
 
 subcommands (all zero-config; -C sets the repo root):
-  map     generate Go struct <-> proto mapper functions + enum bridges
+  map     generate Go struct <-> proto mapper functions, enum bridges, and params->model constructors
   fields  generate bun field/column maps
   patch   generate partial-update field dispatchers + patchData structs
   filter  generate filter/order-by helpers + custom-filter registry

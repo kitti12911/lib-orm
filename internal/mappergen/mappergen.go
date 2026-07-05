@@ -14,6 +14,9 @@
 //   - from_proto: <lowerParams>FromProto(in *<pb>.<Msg>) <Params>       (proto -> params)
 //     for every Create<X>Params struct; the root params returns by value, nested
 //     params return pointers.
+//   - constructors: <lowerModel>ModelFrom<Params>(fk args..., params) *database.<Model>
+//     for every Create<X>Params with a matching bun model; model FK fields absent
+//     from the params (e.g. UserID) become leading function args.
 //   - enum bridges: toProto<Enum> / <lowerEnum>FromProto for every proto enum a
 //     mapped string field targets.
 //
@@ -172,8 +175,10 @@ func (g *generator) run() error {
 	toTargets := b.discoverToTargets(root)
 	// Discover from_proto targets: Create<X>Params -> <root><X>.
 	fromTargets := b.discoverFromTargets(params, root)
+	// Discover constructor targets: Create<X>Params -> *database.<root><X>.
+	ctorTargets := b.discoverCtorTargets(params, root)
 
-	if len(toTargets) == 0 && len(fromTargets) == 0 {
+	if len(toTargets)+len(fromTargets)+len(ctorTargets) == 0 {
 		return nil
 	}
 
@@ -191,6 +196,9 @@ func (g *generator) run() error {
 	}
 	for _, t := range fromTargets {
 		b.renderFromProto(body, t)
+	}
+	for _, t := range ctorTargets {
+		b.renderCtor(body, t)
 	}
 	b.renderEnumBridges(body)
 

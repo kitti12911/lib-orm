@@ -43,6 +43,7 @@ type User struct {
 type UserProfile struct {
 	bun.BaseModel `+"`bun:\"table:user_profiles,alias:up\"`"+`
 	ID        string       `+"`bun:\"id,pk\"`"+`
+	UserID    string       `+"`bun:\"user_id,notnull\"`"+`
 	FirstName *string      `+"`bun:\"first_name\"`"+`
 	User      *User        `+"`bun:\"rel:belongs-to,join:user_id=id\"`"+`
 	Address   *UserAddress `+"`bun:\"rel:has-one,join:id=user_profile_id\"`"+`
@@ -50,8 +51,9 @@ type UserProfile struct {
 
 type UserAddress struct {
 	bun.BaseModel `+"`bun:\"table:user_addresses,alias:ua\"`"+`
-	ID   string  `+"`bun:\"id,pk\"`"+`
-	City *string `+"`bun:\"city\"`"+`
+	ID            string  `+"`bun:\"id,pk\"`"+`
+	UserProfileID string  `+"`bun:\"user_profile_id,notnull\"`"+`
+	City          *string `+"`bun:\"city\"`"+`
 }
 `)
 
@@ -155,6 +157,27 @@ func TestRunGeneratesMappers(t *testing.T) {
 	assert.Contains(t, src, `userv1 "demo/gen/grpc/user/v1"`)
 	assert.Contains(t, src, `database "demo/internal/database"`)
 	assert.Contains(t, src, `"google.golang.org/protobuf/types/known/timestamppb"`)
+}
+
+func TestRunGeneratesModelConstructors(t *testing.T) {
+	dir := fixture(t)
+	require.NoError(t, Run([]string{"-C", dir}))
+	src := generated(t, dir)
+
+	// root: no FK args; matching model/params fields assigned by value
+	assert.Contains(t, src, "func userModelFromCreateParams(params CreateParams) *database.User {")
+	assert.Contains(t, src, "Email:       params.Email,")
+
+	// nested: the model FK field (UserID / UserProfileID) absent from params is
+	// promoted to a leading arg and assigned from that arg, not from params.
+	assert.Contains(t, src, "func userProfileModelFromCreateProfileParams(userID string, params CreateProfileParams) *database.UserProfile {")
+	assert.Contains(t, src, "UserID:    userID,")
+	assert.Contains(t, src, "func userAddressModelFromCreateAddressParams(userProfileID string, params CreateAddressParams) *database.UserAddress {")
+	assert.Contains(t, src, "UserProfileID: userProfileID,")
+
+	// pk / DB-default / relation / nested-params fields are never read from params
+	assert.NotContains(t, src, "params.CreatedAt")
+	assert.NotContains(t, src, "params.Profile")
 }
 
 func TestRunIdempotent(t *testing.T) {

@@ -134,6 +134,95 @@ func orderFromTargets(byGoType map[string]target, rootParams string, params map[
 	return out
 }
 
+// ctorTarget is one params->model constructor to emit.
+type ctorTarget struct {
+	paramsType string    // e.g. "CreateProfileParams"
+	modelType  string    // e.g. "UserProfile"
+	fkArgs     []goField // model FK fields promoted to leading args, declared order
+}
+
+// discoverCtorTargets returns a constructor target for every Create<X>Params
+// whose derived model <root><X> exists, root params first then alphabetical.
+func (b *builder) discoverCtorTargets(params map[string]goStruct, root string) []ctorTarget {
+	var rootT *ctorTarget
+	var rest []ctorTarget
+	for _, name := range sortedKeys(params) {
+		if !strings.HasPrefix(name, "Create") || !strings.HasSuffix(name, "Params") {
+			continue
+		}
+		model := root + strings.TrimSuffix(strings.TrimPrefix(name, "Create"), "Params")
+		ms, ok := b.g.models[model]
+		if !ok {
+			continue
+		}
+		t := ctorTarget{paramsType: name, modelType: model, fkArgs: b.ctorFKArgs(ms, params[name])}
+		if model == root {
+			rootT = &t
+			continue
+		}
+		rest = append(rest, t)
+	}
+	if rootT != nil {
+		return append([]ctorTarget{*rootT}, rest...)
+	}
+	return rest
+}
+
+// ctorFKArgs returns the model's FK fields that become leading constructor args:
+// non-pointer, name ends in "ID" (but is not the pk "ID"), not a relation, and
+// absent from the params struct.
+func (b *builder) ctorFKArgs(model, params goStruct) []goField {
+	paramNames := map[string]bool{}
+	for _, f := range params.fields {
+		paramNames[f.name] = true
+	}
+	var out []goField
+	for _, f := range model.fields {
+		if f.name == "ID" || !strings.HasSuffix(f.name, "ID") || f.ptr || paramNames[f.name] {
+			continue
+		}
+		if _, isModel := b.g.models[f.base]; isModel {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// renderCtor emits <lowerModel>ModelFrom<Params>(fkArgs..., params <Params>) *database.<Model>.
+func (b *builder) renderCtor(buf *bytes.Buffer, t ctorTarget) {
+	fn := lowerFirst(t.modelType) + "ModelFrom" + t.paramsType
+	args := make([]string, 0, len(t.fkArgs)+1)
+	for _, fk := range t.fkArgs {
+		args = append(args, lowerFirst(fk.name)+" "+fk.typ)
+	}
+	args = append(args, "params "+t.paramsType)
+	fmt.Fprintf(buf, "// %s builds a %s.%s from %s.\n", fn, dbAlias, t.modelType, t.paramsType)
+	fmt.Fprintf(buf, "func %s(%s) *%s.%s {\n", fn, strings.Join(args, ", "), dbAlias, t.modelType)
+	fmt.Fprintf(buf, "\treturn &%s.%s{\n", dbAlias, t.modelType)
+
+	paramFields := fieldSet(b.params[t.paramsType])
+	for _, mf := range b.g.models[t.modelType].fields {
+		if isFK(t.fkArgs, mf.name) {
+			fmt.Fprintf(buf, "\t\t%s: %s,\n", mf.name, lowerFirst(mf.name))
+			continue
+		}
+		if pf, ok := paramFields[mf.name]; ok && pf.typ == mf.typ {
+			fmt.Fprintf(buf, "\t\t%s: params.%s,\n", mf.name, mf.name)
+		}
+	}
+	buf.WriteString("\t}\n}\n\n")
+}
+
+func isFK(fks []goField, name string) bool {
+	for _, f := range fks {
+		if f.name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // renderToProto emits toProto<Model>(src *database.<Model>) *<pb>.<Model>.
 func (b *builder) renderToProto(buf *bytes.Buffer, t target) {
 	fn := b.toProto[t.protoType]
