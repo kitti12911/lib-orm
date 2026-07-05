@@ -1,6 +1,7 @@
 package filtergen
 
 import (
+	"go/ast"
 	"go/parser"
 	"os"
 	"path/filepath"
@@ -9,6 +10,41 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLowerFirst(t *testing.T) {
+	assert.Equal(t, "", lowerFirst(""))
+	assert.Equal(t, "foo", lowerFirst("Foo"))
+	assert.Equal(t, "f", lowerFirst("F"))
+	assert.Equal(t, "fOO", lowerFirst("FOO"))
+}
+
+func TestDirectivePresent(t *testing.T) {
+	group := &ast.CommentGroup{List: []*ast.Comment{
+		{Text: "// a comment"},
+		{Text: "//mapgen:ignore"},
+	}}
+	assert.True(t, directivePresent(group, "ignore"))
+	assert.False(t, directivePresent(group, "filter"))
+}
+
+func TestFilterCol(t *testing.T) {
+	cg := func(text string) *ast.CommentGroup {
+		return &ast.CommentGroup{List: []*ast.Comment{{Text: text}}}
+	}
+
+	col, ok := filterCol(cg("//mapgen:filter col=email"))
+	assert.True(t, ok)
+	assert.Equal(t, "email", col)
+
+	_, ok = filterCol(cg("//mapgen:filter")) // no col= token
+	assert.False(t, ok)
+
+	_, ok = filterCol(cg("//mapgen:filter col=")) // empty col value
+	assert.False(t, ok)
+
+	_, ok = filterCol(cg("// not a directive")) // unrelated comment
+	assert.False(t, ok)
+}
 
 // fixture writes a minimal repo (go.mod + models + feature packages) to a temp
 // dir and returns its path.
