@@ -69,6 +69,10 @@ jobs:
 
             - name: Test with coverage
               run: ./scripts/ci/go-test.sh
+              env:
+                  # PRs skip the race detector for speed; pushes (develop/uat/main)
+                  # keep the full CGO+race run as the release gate.
+                  GO_TEST_RACE: ${{ github.event_name == 'push' && 'true' || 'false' }}
 
             - name: Show coverage
               run: |
@@ -100,13 +104,24 @@ jobs:
             - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
               with:
                   python-version: "3.13"
+                  cache: "pip"
+                  cache-dependency-path: .github/workflows/go-ci.yml
+
+            # actions/cache v6.1.0
+            - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+              id: gobin-security
+              with:
+                  path: ~/go/bin
+                  key: ${{ runner.os }}-gobin-security-${{ hashFiles('.github/workflows/go-ci.yml') }}
 
             # govulncheck-action is a composite whose nested steps use tag pins,
             # which the org policy (full-SHA only) rejects — install directly.
-            - name: Install scanners
-              run: |
-                  go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
-                  pip install --quiet semgrep==1.168.0
+            - name: Install govulncheck
+              if: steps.gobin-security.outputs.cache-hit != 'true'
+              run: go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
+
+            - name: Install Semgrep
+              run: pip install --quiet semgrep==1.168.0
 
             - name: govulncheck and Semgrep
               run: ./scripts/ci/security-scan.sh
